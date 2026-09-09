@@ -46,3 +46,5 @@ The first MCP surface is deliberately small and task-centric:
 - UI resources: `Current Task`, `Mini Board` and `Inbox`, each returned as an optional MCP Apps resource while the structured result remains available to the model.
 
 The API and MCP processes use the same `WORKDECK_DB_PATH`. Both are loopback-only during this prototype. Public ChatGPT connectivity, authentication, OAuth and tunnel setup are intentionally deferred; local MCP testing instructions live in `docs/chatgpt-app-testing.md`.
+
+The MCP HTTP boundary applies the official SDK localhost Host validation middleware and a separate Origin allowlist. The default policy permits no arbitrary browser Origin; `MCP_ALLOWED_ORIGINS` is an explicit escape hatch for a future, deliberately configured host and is not authentication. Each SQLite connection applies a 5-second busy timeout, and file-backed databases use WAL mode to make the API/MCP dual-process setup resilient to short-lived read/write contention.

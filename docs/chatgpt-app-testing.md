@@ -32,6 +32,8 @@ npm run dev:mcp
 
 The API is available at `http://127.0.0.1:4100`; the MCP endpoint is `http://127.0.0.1:4200/mcp`. Both processes seed the demo project idempotently. Set `PORT` or `MCP_PORT` if either port is already in use.
 
+The local MCP server accepts requests without an Origin header and accepts loopback browser Origins only. If a supported developer-mode host uses a non-loopback Origin through a tunnel, set an explicit allowlist before starting MCP, for example `MCP_ALLOWED_ORIGINS="https://chatgpt.com" npm run dev:mcp`; keep that value scoped to the host you actually use.
+
 Quick checks:
 
 ```bash
@@ -56,6 +58,8 @@ Open the URL printed by Vite with one of these modes:
 - `http://127.0.0.1:5174/?mode=inbox` — Inbox
 
 This page uses deterministic demo data to verify the widget without requiring a ChatGPT host. The MCP resource uses the same compiled component bundle and receives its real tool output through the MCP Apps bridge when a compatible host is present.
+
+Inside a compatible MCP Apps host, the widget starts with `ui/initialize`, receives `ui/notifications/tool-input` and `ui/notifications/tool-result`, uses `tools/call` for actions, and uses `ui/message` when a task should be opened in the conversation. The standalone page remains a deterministic fallback and does not emulate the host bridge.
 
 ## 4. Optional ChatGPT developer-mode test
 

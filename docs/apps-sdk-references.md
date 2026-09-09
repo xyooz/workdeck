@@ -24,6 +24,16 @@ MCP handlers call `WorkDeckService`, then map results through `packages/app-cont
 
 `board.get`, `task.get` and `inbox.get` advertise `ui://` resources using the current nested `ui.resourceUri` metadata and also include `openai/outputTemplate` for compatibility with existing OpenAI clients. The same tools remain useful without rendering a widget, and the structured payload is always retained. The local UI bundle is self-contained and does not load a remote script.
 
+The UI now uses a standards-first bridge in `apps/chatgpt-ui/src/bridge.ts`: it performs `ui/initialize`, acknowledges with `ui/notifications/initialized`, consumes `ui/notifications/tool-input` and `ui/notifications/tool-result`, proxies server calls with `tools/call`, and sends chat actions with `ui/message`. `window.openai` is consulted only when the standard bridge is unavailable, preserving compatibility without making the widget ChatGPT-specific.
+
+### Local MCP request protection
+
+The MCP Express app uses the official SDK `localhostHostValidation()` middleware for DNS-rebinding protection. It also rejects non-loopback browser Origins by default instead of reflecting arbitrary Origins. Explicit future origins can be supplied through `MCP_ALLOWED_ORIGINS` as a comma-separated allowlist; this does not add authentication or authorization.
+
+### Shared SQLite reliability
+
+Every `WorkDeckDatabase` connection sets `busy_timeout = 5000`. File-backed databases use WAL mode so the API and MCP processes can read concurrently while SQLite still serializes writes. The Phase 0.2A regression suite opens independent connections, exercises REST→MCP and MCP→REST visibility, and runs concurrent short writes in separate Node processes.
+
 ### Local security posture
 
 The API and MCP server bind to `127.0.0.1`. The prototype has no public endpoint, OAuth flow, account model or authentication platform. It uses one SQLite file selected by `WORKDECK_DB_PATH`; the web/API process and MCP process can therefore observe the same local state without introducing a second source of truth.

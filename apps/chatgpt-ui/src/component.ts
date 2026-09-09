@@ -1,3 +1,5 @@
+import { McpAppsBridge } from "./bridge.js";
+
 type WidgetMode = "task" | "board" | "inbox";
 
 type OpenAIWidgetBridge = {
@@ -121,18 +123,32 @@ export function renderWidgetMarkup(mode: WidgetMode, output: unknown) {
   return renderInbox(output);
 }
 
-function currentOutput() {
+function structuredOutput(value: unknown) {
+  const record = asRecord(value);
+  return record.structuredContent ?? value;
+}
+
+function fallbackOutput() {
   return window.openai?.toolOutput ?? window.__WORKDECK_TOOL_OUTPUT__ ?? {};
 }
 
-function currentInput() {
-  return asRecord(window.openai?.toolInput ?? window.__WORKDECK_TOOL_INPUT__);
-}
-
-async function callHostTool(name: string, args: Record<string, unknown>) {
+async function callHostTool(bridge: McpAppsBridge, bridgeReady: Promise<boolean>, name: string, args: Record<string, unknown>) {
+  if (await bridgeReady) return bridge.callTool(name, args);
   if (window.openai?.callTool) return window.openai.callTool(name, args);
   if (window.openai?.sendFollowUpMessage) return window.openai.sendFollowUpMessage(`Use WorkDeck tool ${name} with ${JSON.stringify(args)}.`);
   return undefined;
+}
+
+async function sendHostMessage(bridge: McpAppsBridge, bridgeReady: Promise<boolean>, message: string) {
+  if (await bridgeReady) {
+    await bridge.sendMessage(message);
+    return true;
+  }
+  if (window.openai?.sendFollowUpMessage) {
+    await window.openai.sendFollowUpMessage(message);
+    return true;
+  }
+  return false;
 }
 
 async function copyText(text: string) {
@@ -142,11 +158,25 @@ async function copyText(text: string) {
 export function mountWorkDeckWidget() {
   const root = document.getElementById("root");
   if (!root) return;
-  const mode = window.__WORKDECK_WIDGET_MODE__ ?? "board";
+  let mode = window.__WORKDECK_WIDGET_MODE__ ?? "board";
+  let latestToolInput: unknown;
+  let latestToolOutput: unknown;
+  const bridge = new McpAppsBridge(window);
+  const bridgeReady = bridge.connect();
   const render = (output: unknown) => {
     root.innerHTML = `<style>${style}</style><div class="wd-card">${renderWidgetMarkup(mode, output)}</div>`;
   };
-  render(currentOutput());
+  const renderToolResult = (value: unknown) => {
+    const output = structuredOutput(value);
+    if (!Object.keys(asRecord(output)).length) return;
+    latestToolOutput = output;
+    render(output);
+  };
+  bridge.onToolInput = (params) => {
+    latestToolInput = params;
+  };
+  bridge.onToolResult = renderToolResult;
+  render(structuredOutput(fallbackOutput()));
 
   root.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-action]") : null;
@@ -154,27 +184,30 @@ export function mountWorkDeckWidget() {
     const action = target.dataset.action;
     const taskId = target.dataset.taskId;
     if (!taskId) return;
-    if (action === "open-task") void callHostTool("task.get", { taskId });
+    if (action === "open-task" || action === "follow-up") {
+      void (async () => {
+        const sent = await sendHostMessage(bridge, bridgeReady, `Open WorkDeck task ${taskId} and show its Current Task context.`);
+        if (sent || !window.openai?.callTool) return;
+        mode = "task";
+        const result = await callHostTool(bridge, bridgeReady, "task.get", { taskId });
+        renderToolResult(result);
+      })();
+    }
     if (action === "handoff") {
-      void callHostTool("handoff.generate", { taskId }).then(async (result) => {
-        const markdown = asRecord(asRecord(result).structuredContent).markdown;
+      void callHostTool(bridge, bridgeReady, "handoff.generate", { taskId }).then(async (result) => {
+        const markdown = asRecord(structuredOutput(result)).markdown;
         if (typeof markdown === "string") await copyText(markdown);
       });
     }
-    if (action === "follow-up") void callHostTool("task.get", { taskId });
   });
 
-  window.addEventListener("message", (event) => {
-    const message = asRecord(event.data);
-    const structuredContent = asRecord(asRecord(message.params).structuredContent);
-    if (message.method === "ui/notifications/tool-result" && Object.keys(structuredContent).length) render(structuredContent);
-  });
   window.openai?.subscribe?.((event) => {
-    const structuredContent = asRecord(asRecord(event).structuredContent);
-    if (Object.keys(structuredContent).length) render(structuredContent);
+    if (!bridge.isConnected) renderToolResult(event);
   });
 
-  void currentInput();
+  void bridgeReady;
+  void latestToolInput;
+  void latestToolOutput;
 }
 
 if (typeof document !== "undefined") mountWorkDeckWidget();

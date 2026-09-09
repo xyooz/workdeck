@@ -40,6 +40,8 @@ Phase 0.2A adds the first application boundary:
 - Stable application DTOs shared by REST, Web and MCP adapters
 - Local Streamable HTTP MCP server with project, board, task, inbox, session, artifact, relation and handoff tools
 - Optional MCP Apps UI resources for a Current Task card, Mini Board and Inbox
+- Standards-first MCP Apps `postMessage` bridge with `window.openai` compatibility fallback
+- Host/Origin validation for the local MCP endpoint plus SQLite WAL/busy-timeout dual-process hardening
 - Shared `WORKDECK_DB_PATH` between the Web/API process and the MCP process
 - Local smoke/contract coverage for MCP discovery, reads, writes, validation and task-context isolation
 

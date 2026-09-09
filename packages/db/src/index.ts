@@ -448,6 +448,8 @@ export class WorkDeckDatabase {
     if (filePath !== ":memory:") mkdirSync(dirname(filePath), { recursive: true });
     this.sqlite = new Database(filePath);
     this.sqlite.pragma("foreign_keys = ON");
+    this.sqlite.pragma("busy_timeout = 5000");
+    if (filePath !== ":memory:") this.sqlite.pragma("journal_mode = WAL");
     this.migrate();
   }
 
@@ -494,6 +496,14 @@ export class WorkDeckDatabase {
 
   get isForeignKeysEnabled() {
     return (this.sqlite.pragma("foreign_keys", { simple: true }) as number) === 1;
+  }
+
+  get busyTimeoutMs() {
+    return this.sqlite.pragma("busy_timeout", { simple: true }) as number;
+  }
+
+  get journalMode() {
+    return String(this.sqlite.pragma("journal_mode", { simple: true }));
   }
 
   get migrationVersions(): number[] {

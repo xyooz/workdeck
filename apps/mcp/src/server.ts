@@ -4,6 +4,7 @@ import { join } from "node:path";
 import express, { type Request, type Response } from "express";
 import cors from "cors";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { localhostHostValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { WorkDeckService } from "@workdeck/api";
 import { WorkDeckDatabase } from "@workdeck/db";
 import { createWorkDeckMcpServer } from "./tools.js";
@@ -15,7 +16,39 @@ type McpSession = {
 
 export type McpAppOptions = {
   component?: string;
+  allowedOrigins?: string[];
 };
+
+const LOOPBACK_ORIGIN_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function configuredOrigins() {
+  return (process.env.MCP_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0 && origin !== "*");
+}
+
+export function isAllowedMcpOrigin(origin: string | undefined, explicitOrigins: string[] = configuredOrigins()) {
+  if (!origin) return true;
+  if (explicitOrigins.includes(origin)) return true;
+  try {
+    const parsed = new URL(origin);
+    return parsed.protocol === "http:" && LOOPBACK_ORIGIN_HOSTS.has(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function originValidation(allowedOrigins: string[]) {
+  return (request: Request, response: Response, next: () => void) => {
+    const origin = request.header("origin");
+    if (isAllowedMcpOrigin(origin, allowedOrigins)) {
+      next();
+      return;
+    }
+    response.status(403).json({ error: "Origin is not allowed for the local MCP server" });
+  };
+}
 
 const fallbackComponent = `
 const root = document.getElementById("root");
@@ -29,10 +62,18 @@ export function loadComponentBundle(bundlePath = process.env.WORKDECK_CHATGPT_UI
 
 export function createMcpApp(service: WorkDeckService, options: McpAppOptions = {}) {
   const component = options.component ?? loadComponentBundle();
+  const allowedOrigins = options.allowedOrigins ?? configuredOrigins();
   const sessions = new Map<string, McpSession>();
   const app = express();
 
-  app.use(cors({ origin: true, exposedHeaders: ["Mcp-Session-Id"] }));
+  app.use(localhostHostValidation());
+  app.use(originValidation(allowedOrigins));
+  app.use(
+    cors({
+      origin: (origin, callback) => callback(null, origin && isAllowedMcpOrigin(origin, allowedOrigins) ? origin : false),
+      exposedHeaders: ["Mcp-Session-Id"],
+    }),
+  );
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/health", (_request, response) => {
