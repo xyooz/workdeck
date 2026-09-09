@@ -1,0 +1,70 @@
+# Local MCP Apps testing
+
+This is the Phase 0.2A local smoke flow. It keeps WorkDeck on loopback and uses the same SQLite file for the Web/API and MCP processes.
+
+## 1. Build the widget bundle
+
+From the repository root:
+
+```bash
+npm ci
+npm run typecheck
+npm run build
+```
+
+The MCP server embeds `apps/chatgpt-ui/dist/component.js` when that bundle exists. It falls back to a short “bundle not built” resource if the file is absent.
+
+## 2. Start API and MCP with one database
+
+Use two terminals. The explicit path is useful when testing in isolation:
+
+```bash
+export WORKDECK_DB_PATH="/tmp/workdeck-phase-0-2a.db"
+npm run dev:api
+```
+
+In the second terminal, use the same value:
+
+```bash
+export WORKDECK_DB_PATH="/tmp/workdeck-phase-0-2a.db"
+npm run dev:mcp
+```
+
+The API is available at `http://127.0.0.1:4100`; the MCP endpoint is `http://127.0.0.1:4200/mcp`. Both processes seed the demo project idempotently. Set `PORT` or `MCP_PORT` if either port is already in use.
+
+The local MCP server accepts requests without an Origin header and accepts loopback browser Origins only. `MCP_ALLOWED_ORIGINS` is only the local HTTP Origin allowlist; it is not a Secure MCP Tunnel requirement. Do not preconfigure `https://chatgpt.com` or assume that a ChatGPT browser Origin is forwarded to localhost. If `tunnel-client` actually sends an Origin to the local MCP server, add only that observed exact Origin before starting MCP; otherwise leave the variable unset.
+
+Quick checks:
+
+```bash
+curl http://127.0.0.1:4100/api/health
+curl http://127.0.0.1:4200/health
+```
+
+For protocol-level inspection, point the official MCP Inspector at `http://127.0.0.1:4200/mcp` after starting the server. Test the read tools first, then exercise writes only against a disposable local database.
+
+## 3. Render the UI locally
+
+In a third terminal:
+
+```bash
+npm run dev:chatgpt -- --host 127.0.0.1 --port 5174
+```
+
+Open the URL printed by Vite with one of these modes:
+
+- `http://127.0.0.1:5174/?mode=task` — Current Task Card
+- `http://127.0.0.1:5174/?mode=board` — Mini Board
+- `http://127.0.0.1:5174/?mode=inbox` — Inbox
+
+This page uses deterministic demo data to verify the widget without requiring a ChatGPT host. The MCP resource uses the same compiled component bundle and receives its real tool output through the MCP Apps bridge when a compatible host is present.
+
+Inside a compatible MCP Apps host, the widget starts with `ui/initialize`, receives `ui/notifications/tool-input` and `ui/notifications/tool-result`, uses `tools/call` for actions, and uses `ui/message` when a task should be opened in the conversation. The standalone page remains a deterministic fallback and does not emulate the host bridge.
+
+## 4. Optional ChatGPT developer-mode test
+
+The local `127.0.0.1` endpoint is not directly a public ChatGPT app endpoint. For supported developer-mode testing, use Secure MCP Tunnel: run `tunnel-client` in the same local trust boundary, point it at this MCP server, and keep the tunnel scoped to this disposable database. The tunnel is configured separately from `MCP_ALLOWED_ORIGINS` and keeps the local server private. Do not commit tokens, tunnel credentials or public URLs. Verify tunnel readiness, tool discovery and read-only rendering before testing mutations.
+
+## 5. Cleanup
+
+Stop the three local processes and remove only the disposable database path you selected for this test. The repository's normal `data/` database is not required for the test flow.

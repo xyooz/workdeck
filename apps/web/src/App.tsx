@@ -71,7 +71,7 @@ function relativeTime(timestamp: string) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function taskCode(task: Task) {
+function taskCode(task: { id: string }) {
   return task.id.startsWith("task-") ? task.id.replace("task-", "").toUpperCase() : task.id.slice(0, 8).toUpperCase();
 }
 
@@ -141,9 +141,10 @@ function App() {
   }, [notice]);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? board?.project ?? null;
-  const activeTaskCount = board?.tasks.filter((task) => !["done", "backlog"].includes(task.status)).length ?? 0;
-  const blockedCount = board?.tasks.filter((task) => task.status === "blocked").length ?? 0;
-  const activeSessionCount = board ? new Set(board.tasks.flatMap((task) => task.sessions.filter((session) => session.status === "active").map((session) => session.id))).size : 0;
+  const boardTasks = board?.columns.flatMap((column) => column.tasks) ?? [];
+  const activeTaskCount = boardTasks.filter((task) => !["done", "backlog"].includes(task.status)).length;
+  const blockedCount = boardTasks.filter((task) => task.status === "blocked").length;
+  const activeSessionCount = boardTasks.reduce((total, task) => total + task.sessions.active, 0);
 
   const refreshWorkspace = async () => {
     if (selectedProjectId) await loadBoard(selectedProjectId);
@@ -326,7 +327,7 @@ function App() {
               <span>Keep every session, artifact and decision in context.</span>
             </div>
           </div>
-          <div className="sidebar-footer"><span className="footer-pulse" /> Phase 0.1 · Local only</div>
+          <div className="sidebar-footer"><span className="footer-pulse" /> Phase 0.2A · Local only</div>
         </div>
       </aside>
 
@@ -354,7 +355,7 @@ function App() {
 
           <div className="metric-strip">
             <Metric label="Active work" value={activeTaskCount} accent="blue" />
-            <Metric label="In review" value={board?.tasks.filter((task) => task.status === "reviewing").length ?? 0} accent="violet" />
+            <Metric label="In review" value={boardTasks.filter((task) => task.status === "reviewing").length} accent="violet" />
             <Metric label="Live sessions" value={activeSessionCount} accent="green" />
             <Metric label="Blocked" value={blockedCount} accent="orange" />
           </div>
@@ -362,7 +363,7 @@ function App() {
           {error ? <div className="error-banner"><span>!</span>{error}<button onClick={() => setError(null)}>Dismiss</button></div> : null}
 
           <div className="board-toolbar">
-            <div className="board-toolbar-title"><span className="board-grid-icon">⊞</span><strong>Delivery board</strong><span className="task-count">{board?.tasks.length ?? 0} tasks</span></div>
+            <div className="board-toolbar-title"><span className="board-grid-icon">⊞</span><strong>Delivery board</strong><span className="task-count">{boardTasks.length} tasks</span></div>
             <div className="toolbar-actions"><button className="toolbar-button active">Board</button><button className="toolbar-button" disabled>Timeline</button><button className="toolbar-button" disabled>⌕</button></div>
           </div>
 
@@ -372,7 +373,7 @@ function App() {
             {!loadingBoard && selectedProjectId && board ? (
               <div className="board-scroll">
                 {COLUMNS.map((column) => {
-                  const columnTasks = board.tasks.filter((task) => task.status === column.key);
+                  const columnTasks = board.columns.find((candidate) => candidate.status === column.key)?.tasks ?? [];
                   return <BoardColumn key={column.key} column={column} tasks={columnTasks} onTaskClick={openTask} />;
                 })}
               </div>
@@ -403,10 +404,10 @@ function App() {
 
       {handoff ? <HandoffModal markdown={handoff} onClose={() => setHandoff(null)} onCopied={() => setNotice("Handoff copied to clipboard")} /> : null}
       {modal === "project" ? <Modal title="Create project" onClose={() => setModal(null)}><ProjectForm onSubmit={createProject} onCancel={() => setModal(null)} /></Modal> : null}
-      {modal === "task" ? <Modal title="Add task" onClose={() => setModal(null)}><TaskForm tasks={board?.tasks ?? []} onSubmit={createTask} onCancel={() => setModal(null)} /></Modal> : null}
+      {modal === "task" ? <Modal title="Add task" onClose={() => setModal(null)}><TaskForm tasks={boardTasks} onSubmit={createTask} onCancel={() => setModal(null)} /></Modal> : null}
       {modal === "session" && taskDetail ? <Modal title="Link a session" subtitle={`Connect work to ${taskDetail.task.title}`} onClose={() => setModal(null)}><SessionForm sessions={projectSessions} currentTaskId={taskDetail.task.id} onSubmit={createSession} onCancel={() => setModal(null)} /></Modal> : null}
       {modal === "artifact" && taskDetail ? <Modal title="Attach artifact" subtitle="Record the outcome this task produced" onClose={() => setModal(null)}><ArtifactForm onSubmit={createArtifact} onCancel={() => setModal(null)} /></Modal> : null}
-      {modal === "relation" && taskDetail ? <Modal title="Add relation" subtitle="Connect work without coupling it to a provider" onClose={() => setModal(null)}><RelationForm task={taskDetail.task} tasks={board?.tasks ?? []} sessions={taskDetail.sessions} artifacts={taskDetail.artifacts} onSubmit={createRelation} onCancel={() => setModal(null)} /></Modal> : null}
+      {modal === "relation" && taskDetail ? <Modal title="Add relation" subtitle="Connect work without coupling it to a provider" onClose={() => setModal(null)}><RelationForm task={taskDetail.task} tasks={boardTasks} sessions={taskDetail.sessions} artifacts={taskDetail.artifacts} onSubmit={createRelation} onCancel={() => setModal(null)} /></Modal> : null}
       {notice ? <div className="toast"><span className="toast-check">✓</span>{notice}</div> : null}
     </div>
   );
@@ -429,8 +430,8 @@ function BoardColumn({ column, tasks, onTaskClick }: { column: (typeof COLUMNS)[
 }
 
 function TaskCard({ task, onClick }: { task: BoardTask; onClick: () => void }) {
-  const implementer = task.sessions.find((session) => session.role === "implementer");
-  const reviewer = task.sessions.find((session) => session.role === "reviewer");
+  const implementer = task.sessions.assignments.find((session) => session.role === "implementer");
+  const reviewer = task.sessions.assignments.find((session) => session.role === "reviewer");
   return (
     <button className="task-card" onClick={onClick}>
       <div className="task-card-top"><span className="task-code">{taskCode(task)}</span><span className={`priority priority-${task.priority}`}><span className="priority-glyph">{task.priority === "critical" ? "◆" : task.priority === "high" ? "▲" : task.priority === "medium" ? "●" : "–"}</span>{PRIORITY_LABELS[task.priority]}</span></div>

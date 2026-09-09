@@ -1,0 +1,13 @@
+{
+  "name": "@workdeck/app-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@workdeck/domain": "0.1.0",
+    "zod": "^3.25.28"
+  }
+}

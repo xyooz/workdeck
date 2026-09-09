@@ -1,11 +1,20 @@
-export type Project = {
-  id: string;
-  name: string;
-  description: string;
-  createdAt: string;
-  updatedAt: string;
-  taskCount?: number;
-};
+import type {
+  ArtifactView,
+  BoardView,
+  InboxItem,
+  ProjectListItem,
+  ProjectSessionView,
+  ProjectView,
+  RelationView,
+  SessionView,
+  TaskCardView,
+  TaskDetailView,
+  TaskEventView,
+  TaskSessionView,
+  TaskView,
+} from "@workdeck/app-contracts";
+
+export type Project = ProjectView & { taskCount?: number };
 
 export type TaskStatus = "backlog" | "designing" | "implementing" | "reviewing" | "blocked" | "done";
 export type Priority = "low" | "medium" | "high" | "critical";
@@ -14,103 +23,16 @@ export type Provider = "chatgpt" | "codex" | "claude" | "local" | "other";
 export type SessionStatus = "active" | "waiting" | "completed" | "failed" | "archived";
 export type ArtifactType = "commit" | "pull_request" | "file" | "report" | "test_run" | "other";
 
-export type Task = {
-  id: string;
-  projectId: string;
-  parentTaskId: string | null;
-  title: string;
-  description: string;
-  goal: string;
-  architectureNotes: string;
-  reviewContext: string;
-  acceptanceCriteria: string;
-  constraints: string;
-  nextStep: string;
-  status: TaskStatus;
-  priority: Priority;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type Session = {
-  id: string;
-  projectId: string;
-  name: string;
-  provider: Provider;
-  status: SessionStatus;
-  externalRef: string | null;
-  externalUrl: string | null;
-  summary: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type TaskSession = Session & {
-  taskId: string;
-  role: SessionRole;
-  assignmentCreatedAt: string;
-  assignmentUpdatedAt: string;
-};
-
-export type ProjectSession = Session & {
-  assignments: Array<{
-    taskId: string;
-    sessionId: string;
-    role: SessionRole;
-    createdAt: string;
-    updatedAt: string;
-  }>;
-};
-
-export type Artifact = {
-  id: string;
-  projectId: string;
-  type: ArtifactType;
-  title: string;
-  externalRef: string | null;
-  externalUrl: string | null;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-};
-
-export type BoardTask = Task & {
-  sessions: TaskSession[];
-  artifacts: Artifact[];
-  latestArtifact: Artifact | null;
-};
-
-export type Relation = {
-  id: string;
-  sourceType: "project" | "task" | "session" | "artifact";
-  sourceId: string;
-  targetType: "project" | "task" | "session" | "artifact";
-  targetId: string;
-  relationType: string;
-  metadata: Record<string, unknown> | null;
-  createdAt: string;
-  source: { type: string; id: string; label: string };
-  target: { type: string; id: string; label: string };
-};
-
-export type TaskEvent = {
-  id: string;
-  taskId: string;
-  eventType: string;
-  payload: Record<string, unknown>;
-  createdAt: string;
-};
-
-export type BoardResponse = { project: Project; tasks: BoardTask[] };
-export type TaskDetail = {
-  task: Task;
-  project: Project;
-  parentTask: Task | null;
-  sessions: TaskSession[];
-  artifacts: Artifact[];
-  latestArtifact: Artifact | null;
-  relations: Relation[];
-  events: TaskEvent[];
-};
+export type Task = TaskView;
+export type Session = SessionView;
+export type TaskSession = TaskSessionView;
+export type ProjectSession = ProjectSessionView;
+export type Artifact = ArtifactView;
+export type BoardTask = TaskCardView;
+export type Relation = RelationView;
+export type TaskEvent = TaskEventView;
+export type BoardResponse = BoardView;
+export type TaskDetail = TaskDetailView;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -126,7 +48,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  listProjects: () => request<{ projects: Project[] }>("/api/projects"),
+  listProjects: () => request<{ projects: ProjectListItem[] }>("/api/projects"),
   createProject: (body: { name: string; description: string }) =>
     request<{ project: Project }>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
   getBoard: (projectId: string) => request<BoardResponse>(`/api/projects/${projectId}/board`),
@@ -141,6 +63,7 @@ export const api = {
   createArtifact: (taskId: string, body: Record<string, unknown>) =>
     request<{ artifact: Artifact }>(`/api/tasks/${taskId}/artifacts`, { method: "POST", body: JSON.stringify(body) }),
   getHandoff: (taskId: string) => request<{ markdown: string }>(`/api/tasks/${taskId}/handoff`),
+  getInbox: (projectId?: string) => request<{ items: InboxItem[] }>(`/api/inbox${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`),
   createRelation: (body: { sourceType: string; sourceId: string; targetType: string; targetId: string; relationType: string }) =>
     request<{ relation: Relation }>("/api/relations", { method: "POST", body: JSON.stringify(body) }),
 };
