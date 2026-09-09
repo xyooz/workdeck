@@ -5,18 +5,24 @@
   "type": "module",
   "workspaces": [
     "apps/web",
+    "apps/mcp",
+    "apps/chatgpt-ui",
     "packages/domain",
     "packages/db",
-    "packages/api"
+    "packages/api",
+    "packages/app-contracts"
   ],
   "scripts": {
     "dev": "concurrently -k \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "tsx packages/api/src/server.ts",
+    "dev:mcp": "tsx apps/mcp/src/server.ts",
     "dev:web": "vite --config apps/web/vite.config.ts",
-    "build": "npm run build -w @workdeck/web",
-    "typecheck": "npm run typecheck:backend && npm run typecheck:web",
+    "dev:chatgpt": "vite --config apps/chatgpt-ui/vite.config.ts",
+    "build": "npm run build -w @workdeck/chatgpt-ui && npm run build -w @workdeck/web && npm run build -w @workdeck/mcp",
+    "typecheck": "npm run typecheck:backend && npm run typecheck:web && npm run typecheck:chatgpt",
     "typecheck:backend": "tsc --noEmit",
     "typecheck:web": "tsc -p apps/web/tsconfig.json --noEmit",
+    "typecheck:chatgpt": "tsc -p apps/chatgpt-ui/tsconfig.json --noEmit",
     "test": "vitest run",
     "db:migrate": "tsx packages/db/src/cli.ts",
     "db:seed": "tsx packages/db/src/cli.ts --seed"

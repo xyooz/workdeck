@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WorkDeck ChatGPT UI Prototype</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const mode = new URLSearchParams(window.location.search).get("mode") || "board";
+      window.__WORKDECK_WIDGET_MODE__ = ["board", "task", "inbox"].includes(mode) ? mode : "board";
+      window.__WORKDECK_TOOL_OUTPUT__ = {
+        project: { id: "demo", name: "AgentDeck", description: "AI-assisted delivery" },
+        columns: [
+          { status: "backlog", tasks: [] },
+          { status: "designing", tasks: [] },
+          { status: "implementing", tasks: [{ id: "task-2c", title: "Phase 0.2 · MCP prototype", status: "implementing", priority: "high", updatedAt: new Date().toISOString(), sessions: { active: 1, total: 2, assignments: [] }, latestArtifact: null }] },
+          { status: "reviewing", tasks: [] },
+          { status: "blocked", tasks: [] },
+          { status: "done", tasks: [] }
+        ],
+        task: { id: "task-2c", projectId: "demo", parentTaskId: null, title: "Phase 0.2 · MCP prototype", description: "Validate WorkDeck as a ChatGPT work entry.", goal: "Make the task context available inside ChatGPT.", architectureNotes: "Keep the core provider-neutral.", reviewContext: "", acceptanceCriteria: "Read tools return stable contracts.", constraints: "No provider SDK in the domain.", nextStep: "Run the MCP smoke test.", status: "implementing", priority: "high", updatedAt: new Date().toISOString() },
+        sessions: [{ id: "session-1", name: "ChatGPT", role: "architect", provider: "chatgpt", status: "active" }],
+        artifacts: [],
+        latestArtifact: null,
+        items: [{ type: "review", taskId: "task-2c", title: "Phase 0.2 · MCP prototype", reason: "Task is ready for review", priority: "high", updatedAt: new Date().toISOString() }]
+      };
+    </script>
+    <script type="module" src="/src/component.ts"></script>
+  </body>
+</html>

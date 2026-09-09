@@ -34,5 +34,5 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Build web app
+      - name: Build published workspaces
         run: npm run build

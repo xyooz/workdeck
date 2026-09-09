@@ -1,4 +1,4 @@
-# WorkDeck Phase 0.1 architecture
+# WorkDeck Phase 0.2A architecture
 
 The data model keeps the core entities normalized and leaves cross-entity semantics in `relations`:
 
@@ -27,3 +27,22 @@ The API read model enriches a Task with directly assigned Sessions, explicitly o
 - Relation and artifact attachment writes inspect SQLite changes before emitting activity, so idempotent requests do not fabricate timeline events. Contextual Relations update and emit activity only for the intersection of their endpoint contexts; direct Task endpoints remain scoped to those endpoint Tasks.
 - The API explicitly listens on `127.0.0.1`.
 - CORS is limited to the local web origin `http://127.0.0.1:5173`, and the Vite API proxy uses the same IPv4 loopback address.
+
+## Application boundary
+
+```text
+Domain rules → WorkDeckService → App Contracts → REST / Web
+                              ↘ MCP Server → MCP Apps UI resources → ChatGPT (later)
+                                   ↓
+                             WorkDeckDatabase
+```
+
+`WorkDeckService` is the only application-facing entry point for MCP writes and reads. MCP handlers do not open SQLite, issue SQL, invoke shell commands or inspect provider-specific state. The app-contracts package exposes stable DTOs and command schemas; adapters map those contracts to the domain/application layer.
+
+The first MCP surface is deliberately small and task-centric:
+
+- Reads: `project.list`, `project.get`, `board.get`, `task.get`, `task.list`, `inbox.get`, `handoff.generate`.
+- Writes: `task.create`, `task.update`, `session.create`, `session.assign`, `artifact.attach`, `relation.create`.
+- UI resources: `Current Task`, `Mini Board` and `Inbox`, each returned as an optional MCP Apps resource while the structured result remains available to the model.
+
+The API and MCP processes use the same `WORKDECK_DB_PATH`. Both are loopback-only during this prototype. Public ChatGPT connectivity, authentication, OAuth and tunnel setup are intentionally deferred; local MCP testing instructions live in `docs/chatgpt-app-testing.md`.

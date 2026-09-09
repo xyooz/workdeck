@@ -35,6 +35,14 @@ Phase 0.1.1 includes:
 - Markdown Handoff Generator with architecture decisions, review context, acceptance criteria, constraints and next step
 - Seeded AgentDeck demo data
 
+Phase 0.2A adds the first application boundary:
+
+- Stable application DTOs shared by REST, Web and MCP adapters
+- Local Streamable HTTP MCP server with project, board, task, inbox, session, artifact, relation and handoff tools
+- Optional MCP Apps UI resources for a Current Task card, Mini Board and Inbox
+- Shared `WORKDECK_DB_PATH` between the Web/API process and the MCP process
+- Local smoke/contract coverage for MCP discovery, reads, writes, validation and task-context isolation
+
 The app runs locally as a small TypeScript monorepo. There is no PostgreSQL, Redis, queue, connector, multi-user layer or cloud deployment in this phase.
 
 ## Local development
@@ -56,6 +64,8 @@ npm run typecheck
 npm run build
 npm run db:migrate
 npm run db:seed
+npm run dev:mcp
+npm run dev:chatgpt
 ```
 
 Set `WORKDECK_DB_PATH` to use another SQLite file. The database enables foreign keys and removes polymorphic Relations through explicit delete triggers when their Project, Task, Session or Artifact is deleted. The API binds explicitly to `127.0.0.1`; it is not intended to be a LAN service.
@@ -63,22 +73,22 @@ Set `WORKDECK_DB_PATH` to use another SQLite file. The database enables foreign 
 ## Architecture
 
 ```text
-packages/domain   →   packages/db   →   packages/api   →   apps/web
-    rules              persistence       application       UI adapter
+packages/domain   →   packages/db
+       rules             persistence
+              ↘   WorkDeckService   →   packages/app-contracts   →   REST / Web
+                                      ↘   apps/mcp               →   MCP Apps UI / ChatGPT
 ```
 
-The domain package contains the vocabulary, validation schemas and pure Handoff renderer. The database package owns SQLite schema, migrations and repositories. The API package composes repositories into task-centric read models. The React app only talks to HTTP endpoints and does not know about SQLite or provider SDKs.
+The domain package contains the vocabulary, validation schemas and pure Handoff renderer. The database package owns SQLite schema, migrations and repositories. `WorkDeckService` is the application boundary used by both REST and MCP; neither adapter talks to SQLite directly. `packages/app-contracts` maps internal read models to stable DTOs, so provider SDKs and database details stay outside the core model. The local MCP server and API both bind to loopback and can share one `WORKDECK_DB_PATH`.
 
 ## Future roadmap
 
-These are intentionally not implemented in Phase 0.1:
+These are intentionally not implemented yet:
 
 ```text
-Phase 0.2  GitHub integration
-Phase 0.3  MCP server
-Phase 0.4  ChatGPT App
-Phase 0.5  Agent session automation
-Phase 0.6  Mobile companion
+Phase 0.2B  GitHub integration
+Phase 0.3   Agent session automation
+Phase 0.4   Mobile companion
 ```
 
 ## Known limitations
@@ -87,3 +97,4 @@ Phase 0.6  Mobile companion
 - Relations are displayed as a list. A graph view is out of scope.
 - Sessions and Artifacts are entered manually; no connector synchronizes external systems yet.
 - This is a single-user, local-only board.
+- The MCP endpoint is local-only in this prototype. A remote ChatGPT connection needs a separately configured HTTPS endpoint or Secure MCP Tunnel; no public exposure or authentication platform is included yet.

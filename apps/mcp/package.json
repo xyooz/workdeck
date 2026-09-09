@@ -1,0 +1,22 @@
+{
+  "name": "@workdeck/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@workdeck/api": "0.1.0",
+    "@workdeck/app-contracts": "0.1.0",
+    "@workdeck/db": "0.1.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "zod": "^3.25.28"
+  }
+}
