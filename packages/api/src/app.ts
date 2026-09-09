@@ -2,6 +2,7 @@ import cors from "cors";
 import express, { type Request, type Response } from "express";
 import {
   CreateArtifactInputSchema,
+  AssignSessionToTaskInputSchema,
   CreateProjectInputSchema,
   CreateRelationInputSchema,
   CreateSessionInputSchema,
@@ -9,6 +10,7 @@ import {
   DomainError,
   NotFoundError,
   renderHandoffMarkdown,
+  SessionRoleSchema,
   UpdateTaskInputSchema,
   type Artifact,
   type EntityType,
@@ -61,7 +63,7 @@ export class WorkDeckService {
     const parent = task.parentTaskId ? this.db.getTask(task.parentTaskId) : null;
     const sessions = this.db.listSessionsForTask(task.id);
     const artifacts = this.db.listArtifactsForTask(task.id);
-    const relations = this.relationsForTask(task, sessions);
+    const relations = this.relationsForTask(task);
     return {
       task,
       project,
@@ -82,10 +84,13 @@ export class WorkDeckService {
     const task = this.requireTask(taskId);
     const body = (input ?? {}) as Record<string, unknown>;
     if (typeof body.sessionId === "string" && body.sessionId.trim()) {
-      return this.db.linkSessionToTask(body.sessionId, taskId);
+      return this.db.assignSessionToTask(AssignSessionToTaskInputSchema.parse({ ...body, taskId }));
     }
-    const parsed = CreateSessionInputSchema.parse({ ...body, projectId: task.projectId, taskId });
-    return this.db.createSession(parsed);
+    const { role: roleInput, sessionId: _sessionId, ...sessionInput } = body;
+    const role = SessionRoleSchema.parse(roleInput ?? "implementer");
+    const parsed = CreateSessionInputSchema.parse({ ...sessionInput, projectId: task.projectId });
+    const session = this.db.createSession(parsed);
+    return this.db.assignSessionToTask({ taskId, sessionId: session.id, role });
   }
 
   createArtifactForTask(taskId: string, input: unknown) {
@@ -139,12 +144,8 @@ export class WorkDeckService {
     };
   }
 
-  private relationsForTask(task: Task, sessions: Session[]) {
-    const all = [
-      ...this.db.listRelationsForEntity("task", task.id),
-      ...sessions.flatMap((session) => this.db.listRelationsForEntity("session", session.id)),
-    ];
-    return Array.from(new Map(all.map((relation) => [relation.id, relation])).values());
+  private relationsForTask(task: Task) {
+    return this.db.listRelationsForTask(task.id);
   }
 
   private enrichRelation(relation: Relation) {
@@ -203,7 +204,7 @@ function safe(handler: (request: Request, response: Response) => unknown) {
 
 export function createApp(service: WorkDeckService) {
   const app = express();
-  app.use(cors());
+  app.use(cors({ origin: "http://127.0.0.1:5173" }));
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/api/health", (_request, response) => response.json({ ok: true, service: "workdeck" }));

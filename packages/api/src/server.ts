@@ -6,8 +6,8 @@ const database = new WorkDeckDatabase();
 database.seedDemo();
 const app = createApp(new WorkDeckService(database));
 
-const server = app.listen(port, () => {
-  console.log(`WorkDeck API listening on http://localhost:${port}`);
+const server = app.listen(port, "127.0.0.1", () => {
+  console.log(`WorkDeck API listening on http://127.0.0.1:${port}`);
   console.log(`SQLite: ${database.filePath}`);
 });
 

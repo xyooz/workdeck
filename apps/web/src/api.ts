@@ -20,6 +20,12 @@ export type Task = {
   parentTaskId: string | null;
   title: string;
   description: string;
+  goal: string;
+  architectureNotes: string;
+  reviewContext: string;
+  acceptanceCriteria: string;
+  constraints: string;
+  nextStep: string;
   status: TaskStatus;
   priority: Priority;
   createdAt: string;
@@ -29,16 +35,31 @@ export type Task = {
 export type Session = {
   id: string;
   projectId: string;
-  taskId: string | null;
   name: string;
   provider: Provider;
-  role: SessionRole;
   status: SessionStatus;
   externalRef: string | null;
   externalUrl: string | null;
   summary: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type TaskSession = Session & {
+  taskId: string;
+  role: SessionRole;
+  assignmentCreatedAt: string;
+  assignmentUpdatedAt: string;
+};
+
+export type ProjectSession = Session & {
+  assignments: Array<{
+    taskId: string;
+    sessionId: string;
+    role: SessionRole;
+    createdAt: string;
+    updatedAt: string;
+  }>;
 };
 
 export type Artifact = {
@@ -53,7 +74,7 @@ export type Artifact = {
 };
 
 export type BoardTask = Task & {
-  sessions: Session[];
+  sessions: TaskSession[];
   artifacts: Artifact[];
   latestArtifact: Artifact | null;
 };
@@ -84,7 +105,7 @@ export type TaskDetail = {
   task: Task;
   project: Project;
   parentTask: Task | null;
-  sessions: Session[];
+  sessions: TaskSession[];
   artifacts: Artifact[];
   latestArtifact: Artifact | null;
   relations: Relation[];
@@ -109,15 +130,17 @@ export const api = {
   createProject: (body: { name: string; description: string }) =>
     request<{ project: Project }>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
   getBoard: (projectId: string) => request<BoardResponse>(`/api/projects/${projectId}/board`),
-  createTask: (projectId: string, body: { title: string; description: string; status: TaskStatus; priority: Priority; parentTaskId: string | null }) =>
+  createTask: (projectId: string, body: { title: string; description: string; status: TaskStatus; priority: Priority; parentTaskId: string | null; goal?: string; architectureNotes?: string; reviewContext?: string; acceptanceCriteria?: string; constraints?: string; nextStep?: string }) =>
     request<{ task: Task }>(`/api/projects/${projectId}/tasks`, { method: "POST", body: JSON.stringify(body) }),
   getTask: (taskId: string) => request<TaskDetail>(`/api/tasks/${taskId}`),
-  updateTask: (taskId: string, body: Partial<Pick<Task, "title" | "description" | "status" | "priority" | "parentTaskId">>) =>
+  updateTask: (taskId: string, body: Partial<Pick<Task, "title" | "description" | "goal" | "architectureNotes" | "reviewContext" | "acceptanceCriteria" | "constraints" | "nextStep" | "status" | "priority" | "parentTaskId">>) =>
     request<{ task: Task }>(`/api/tasks/${taskId}`, { method: "PATCH", body: JSON.stringify(body) }),
-  listProjectSessions: (projectId: string) => request<{ sessions: Session[] }>(`/api/projects/${projectId}/sessions`),
+  listProjectSessions: (projectId: string) => request<{ sessions: ProjectSession[] }>(`/api/projects/${projectId}/sessions`),
   createSession: (taskId: string, body: Record<string, unknown>) =>
     request<{ session: Session }>(`/api/tasks/${taskId}/sessions`, { method: "POST", body: JSON.stringify(body) }),
   createArtifact: (taskId: string, body: Record<string, unknown>) =>
     request<{ artifact: Artifact }>(`/api/tasks/${taskId}/artifacts`, { method: "POST", body: JSON.stringify(body) }),
   getHandoff: (taskId: string) => request<{ markdown: string }>(`/api/tasks/${taskId}/handoff`),
+  createRelation: (body: { sourceType: string; sourceId: string; targetType: string; targetId: string; relationType: string }) =>
+    request<{ relation: Relation }>("/api/relations", { method: "POST", body: JSON.stringify(body) }),
 };

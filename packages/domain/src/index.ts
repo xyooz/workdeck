@@ -30,6 +30,7 @@ export const TASK_EVENT_TYPES = [
   "task_created",
   "status_changed",
   "session_linked",
+  "session_role_changed",
   "artifact_attached",
   "relation_created",
 ] as const;
@@ -67,6 +68,12 @@ export const CreateTaskInputSchema = z.object({
   parentTaskId: id.optional().nullable(),
   title: z.string().trim().min(1).max(180),
   description: z.string().trim().max(8000).optional().default(""),
+  goal: z.string().trim().max(8000).optional().default(""),
+  architectureNotes: z.string().trim().max(12000).optional().default(""),
+  reviewContext: z.string().trim().max(12000).optional().default(""),
+  acceptanceCriteria: z.string().trim().max(12000).optional().default(""),
+  constraints: z.string().trim().max(12000).optional().default(""),
+  nextStep: z.string().trim().max(4000).optional().default(""),
   status: TaskStatusSchema.default("backlog"),
   priority: PrioritySchema.default("medium"),
 });
@@ -75,23 +82,66 @@ export const UpdateTaskInputSchema = z
   .object({
     title: z.string().trim().min(1).max(180).optional(),
     description: z.string().trim().max(8000).optional(),
+    goal: z.string().trim().max(8000).optional(),
+    architectureNotes: z.string().trim().max(12000).optional(),
+    reviewContext: z.string().trim().max(12000).optional(),
+    acceptanceCriteria: z.string().trim().max(12000).optional(),
+    constraints: z.string().trim().max(12000).optional(),
+    nextStep: z.string().trim().max(4000).optional(),
     status: TaskStatusSchema.optional(),
     priority: PrioritySchema.optional(),
     parentTaskId: id.optional().nullable(),
   })
-  .refine((value) => Object.keys(value).length > 0, "at least one task field is required");
+    .refine((value) => Object.keys(value).length > 0, "at least one task field is required");
 
-export const CreateSessionInputSchema = z.object({
-  projectId: id,
-  taskId: id.optional().nullable(),
-  name: z.string().trim().min(1).max(160),
-  provider: ProviderSchema.default("other"),
-  role: SessionRoleSchema.default("implementer"),
-  status: SessionStatusSchema.default("active"),
-  externalRef: optionalText(240),
-  externalUrl: optionalText(1000),
-  summary: optionalText(4000),
-});
+export const RELATION_COMPATIBILITY = {
+  defines: [["session", "task"]],
+  implements: [["session", "task"]],
+  reviews: [
+    ["session", "task"],
+    ["session", "artifact"],
+  ],
+  produces: [
+    ["session", "artifact"],
+    ["task", "artifact"],
+  ],
+  continues: [["session", "session"]],
+  depends_on: [["task", "task"]],
+  blocks: [["task", "task"]],
+  fixes: [["task", "task"]],
+  derived_from: [
+    ["task", "task"],
+    ["task", "artifact"],
+    ["artifact", "task"],
+    ["artifact", "artifact"],
+  ],
+} as const satisfies Record<RelationType, readonly (readonly [EntityType, EntityType])[]>;
+
+export function isRelationCompatible(sourceType: EntityType, targetType: EntityType, relationType: RelationType) {
+  return RELATION_COMPATIBILITY[relationType].some(([allowedSource, allowedTarget]) => allowedSource === sourceType && allowedTarget === targetType);
+}
+
+const relationEndpointLabel = (sourceType: EntityType, targetType: EntityType) => `${sourceType} → ${targetType}`;
+
+export const CreateSessionInputSchema = z
+  .object({
+    projectId: id,
+    name: z.string().trim().min(1).max(160),
+    provider: ProviderSchema.default("other"),
+    status: SessionStatusSchema.default("active"),
+    externalRef: optionalText(240),
+    externalUrl: optionalText(1000),
+    summary: optionalText(4000),
+  })
+  .strict();
+
+export const AssignSessionToTaskInputSchema = z
+  .object({
+    taskId: id,
+    sessionId: id,
+    role: SessionRoleSchema.default("implementer"),
+  })
+  .strict();
 
 export const CreateArtifactInputSchema = z.object({
   projectId: id,
@@ -102,14 +152,26 @@ export const CreateArtifactInputSchema = z.object({
   metadata: z.record(z.unknown()).default({}),
 });
 
-export const CreateRelationInputSchema = z.object({
-  sourceType: EntityTypeSchema,
-  sourceId: id,
-  targetType: EntityTypeSchema,
-  targetId: id,
-  relationType: RelationTypeSchema,
-  metadata: z.record(z.unknown()).optional().nullable(),
-});
+export const CreateRelationInputSchema = z
+  .object({
+    sourceType: EntityTypeSchema,
+    sourceId: id,
+    targetType: EntityTypeSchema,
+    targetId: id,
+    relationType: RelationTypeSchema,
+    metadata: z.record(z.unknown()).optional().nullable(),
+  })
+  .superRefine((value, context) => {
+    if (isRelationCompatible(value.sourceType, value.targetType, value.relationType)) return;
+    const allowed = RELATION_COMPATIBILITY[value.relationType]
+      .map(([sourceType, targetType]) => relationEndpointLabel(sourceType, targetType))
+      .join(", ");
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["relationType"],
+      message: `Relation ${value.relationType} does not allow ${relationEndpointLabel(value.sourceType, value.targetType)}; allowed: ${allowed}`,
+    });
+  });
 
 export interface Project {
   id: string;
@@ -125,6 +187,12 @@ export interface Task {
   parentTaskId: string | null;
   title: string;
   description: string;
+  goal: string;
+  architectureNotes: string;
+  reviewContext: string;
+  acceptanceCriteria: string;
+  constraints: string;
+  nextStep: string;
   status: TaskStatus;
   priority: Priority;
   createdAt: string;
@@ -134,16 +202,33 @@ export interface Task {
 export interface Session {
   id: string;
   projectId: string;
-  taskId: string | null;
   name: string;
   provider: Provider;
-  role: SessionRole;
   status: SessionStatus;
   externalRef: string | null;
   externalUrl: string | null;
   summary: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SessionAssignment {
+  taskId: string;
+  sessionId: string;
+  role: SessionRole;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskSession extends Session {
+  taskId: string;
+  role: SessionRole;
+  assignmentCreatedAt: string;
+  assignmentUpdatedAt: string;
+}
+
+export interface ProjectSession extends Session {
+  assignments: SessionAssignment[];
 }
 
 export interface Artifact {
@@ -184,9 +269,9 @@ export interface HandoffRelation {
 
 export interface HandoffContext {
   projectName: string;
-  task: Pick<Task, "title" | "description" | "status" | "priority">;
+  task: Pick<Task, "title" | "description" | "goal" | "architectureNotes" | "reviewContext" | "acceptanceCriteria" | "constraints" | "nextStep" | "status" | "priority">;
   relatedTasks: Array<{ title: string; status: TaskStatus; relationType: RelationType }>;
-  sessions: Array<Pick<Session, "name" | "role" | "provider" | "status" | "summary">>;
+  sessions: Array<Pick<TaskSession, "name" | "role" | "provider" | "status" | "summary">>;
   artifacts: Array<Pick<Artifact, "type" | "title" | "externalRef" | "externalUrl">>;
   dependencies: Array<{ title: string; relationType: RelationType }>;
   relations: HandoffRelation[];
@@ -238,12 +323,13 @@ export function renderHandoffMarkdown(context: HandoffContext): string {
   const relations = context.relations.map(
     (relation) => `- ${relation.source} — ${relationize(relation.relationType)} → ${relation.target}`,
   );
+  const reviewContext = [context.task.reviewContext, ...context.knownReviewFixContext].filter(Boolean);
 
   return `# ${projectName} — ${task.title} Handoff
 
 ## Goal
 
-${task.description || "No goal has been recorded yet."}
+${task.goal || task.description || "No goal has been recorded yet."}
 
 ## Current Status
 
@@ -253,6 +339,10 @@ ${task.description || "No goal has been recorded yet."}
 ## Task Description
 
 ${task.description || "No additional task description."}
+
+## Key Architecture Decisions
+
+${task.architectureNotes || "- None recorded"}
 
 ## Related Tasks
 
@@ -276,11 +366,19 @@ ${bulletList(relations)}
 
 ## Known Review / Fix Context
 
-${bulletList(context.knownReviewFixContext)}
+${reviewContext.length ? reviewContext.map((item) => (item.startsWith("- ") ? item : `- ${item}`)).join("\n") : "- None"}
+
+## Acceptance Criteria
+
+${task.acceptanceCriteria || "- None recorded"}
+
+## Protected Constraints
+
+${task.constraints || "- None recorded"}
 
 ## Next Step
 
-Continue from the current status and preserve the relations and artifacts listed above.
+${task.nextStep || "Continue from the current status and preserve the relations and artifacts listed above."}
 `;
 }
 
@@ -288,5 +386,6 @@ export type CreateProjectInput = z.input<typeof CreateProjectInputSchema>;
 export type CreateTaskInput = z.input<typeof CreateTaskInputSchema>;
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInputSchema>;
 export type CreateSessionInput = z.input<typeof CreateSessionInputSchema>;
+export type AssignSessionToTaskInput = z.input<typeof AssignSessionToTaskInputSchema>;
 export type CreateArtifactInput = z.input<typeof CreateArtifactInputSchema>;
 export type CreateRelationInput = z.input<typeof CreateRelationInputSchema>;

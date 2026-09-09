@@ -8,28 +8,31 @@ It is designed for projects where multiple ChatGPT, Codex, Claude or local sessi
 
 ```text
 Project
-  ↓
-Task
-  ↓
-Session
-  ↓
-Artifact
-
-Relation connects all entities.
+  ├─ Task ──┐
+  ├─ Session │ TaskSession assignments carry the per-task role
+  └─ Artifact┘
+       └──── explicit Task → produces → Artifact ownership
 ```
 
 The model is intentionally provider-neutral. A Session is a work session, not a hard-coded ChatGPT or Codex object. Relations such as `implements`, `reviews`, `produces`, `depends_on`, `blocks` and `fixes` preserve the delivery graph without turning it into a graph-database dependency.
+Relation endpoint semantics are validated in the Domain package. A Task only lists Artifacts with an explicit `Task → produces → Artifact` ownership relation; a shared Session never leaks another Task's Artifacts or activity into the current Task context.
 
 ## Current scope
 
-Phase 0.1 includes:
+Phase 0.1.1 includes:
 
 - Domain Model with Zod validation
 - SQLite persistence with an explicit migration
 - Parent/child Tasks and task event history
+- Many-to-many Task–Session assignments with a role per assignment
+- Task-context isolation for shared Sessions, Artifacts, Relations and Handoffs
+- Relation compatibility matrix enforced in the Domain layer
+- Recursive parent-cycle protection and idempotent activity events
+- Separate Session creation and Task assignment schemas, including role-change events
+- Loopback-only API binding for the local single-user app
 - PC Workboard grouped by task status
-- Task Detail for Sessions, Artifacts, Relations and events
-- Markdown Handoff Generator
+- Task Detail for Sessions, Artifacts, Relations, events and editable handoff context
+- Markdown Handoff Generator with architecture decisions, review context, acceptance criteria, constraints and next step
 - Seeded AgentDeck demo data
 
 The app runs locally as a small TypeScript monorepo. There is no PostgreSQL, Redis, queue, connector, multi-user layer or cloud deployment in this phase.
@@ -49,12 +52,13 @@ Useful commands:
 
 ```bash
 npm test
+npm run typecheck
 npm run build
 npm run db:migrate
 npm run db:seed
 ```
 
-Set `WORKDECK_DB_PATH` to use another SQLite file. The database enables foreign keys and removes polymorphic Relations through explicit delete triggers when their Project, Task, Session or Artifact is deleted.
+Set `WORKDECK_DB_PATH` to use another SQLite file. The database enables foreign keys and removes polymorphic Relations through explicit delete triggers when their Project, Task, Session or Artifact is deleted. The API binds explicitly to `127.0.0.1`; it is not intended to be a LAN service.
 
 ## Architecture
 
