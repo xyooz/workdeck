@@ -72,7 +72,7 @@ describe("WorkDeck Phase 0.1 domain and persistence", () => {
 
       const second = new WorkDeckDatabase(filePath);
       expect(second.isForeignKeysEnabled).toBe(true);
-      expect(second.migrationVersions).toEqual([1, 2, 3]);
+      expect(second.migrationVersions).toEqual([1, 2, 3, 4]);
       expect(second.getProject(project.id)?.name).toBe("Durable");
       expect(second.getTask(task.id)?.title).toBe("Persist me");
       expect(second.listRelationsForEntity("task", task.id).length).toBeGreaterThan(0);
@@ -159,18 +159,24 @@ describe("WorkDeck Phase 0.1 domain and persistence", () => {
       CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_task_id TEXT, title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, priority TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT, name TEXT NOT NULL, provider TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL, external_ref TEXT, external_url TEXT, summary TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE artifacts (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, external_ref TEXT, external_url TEXT, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
       CREATE TABLE relations (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL, target_type TEXT NOT NULL, target_id TEXT NOT NULL, relation_type TEXT NOT NULL, metadata_json TEXT, created_at TEXT NOT NULL);
       CREATE TABLE task_events (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, event_type TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
       INSERT INTO projects VALUES ('p', 'Legacy', '', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
       INSERT INTO tasks VALUES ('t', 'p', NULL, 'Legacy task', '', 'implementing', 'medium', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
       INSERT INTO sessions VALUES ('s', 'p', 't', 'Long Chat', 'chatgpt', 'reviewer', 'active', NULL, NULL, NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+      INSERT INTO artifacts VALUES ('a', 'p', 'commit', 'legacy-commit', 'legacy-commit', NULL, '{}', '2026-01-01T00:00:00.000Z');
+      INSERT INTO relations VALUES ('legacy-session-artifact', 'session', 's', 'artifact', 'a', 'produces', NULL, '2026-01-01T00:00:00.000Z');
+      INSERT INTO task_events VALUES ('legacy-artifact-event', 't', 'artifact_attached', '{"artifactId":"a"}', '2026-01-01T00:00:00.000Z');
     `);
     legacy.close();
     try {
       const database = new WorkDeckDatabase(filePath);
-      expect(database.migrationVersions).toEqual([1, 2, 3]);
+      expect(database.migrationVersions).toEqual([1, 2, 3, 4]);
       expect(database.getSession("s")).not.toHaveProperty("role");
       expect(database.listSessionsForTask("t")[0]).toEqual(expect.objectContaining({ id: "s", taskId: "t", role: "reviewer" }));
+      expect(database.listArtifactsForTask("t")).toEqual(expect.arrayContaining([expect.objectContaining({ id: "a", title: "legacy-commit" })]));
+      expect(new WorkDeckService(database).getHandoff("t").markdown).toContain("legacy-commit");
       database.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });

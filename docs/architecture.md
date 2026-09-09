@@ -20,6 +20,7 @@ The API read model enriches a Task with directly assigned Sessions, explicitly o
 - `sessions` no longer stores `task_id` or `role`. The `task_sessions` join table stores one role per Task–Session assignment, allowing a long-lived Chat to be an architect on one Task and a reviewer on another.
 - Migration 2 upgrades the original single-task rows into `task_sessions` while preserving their role and timestamps.
 - Migration 3 expands the TaskEvent check constraint with `session_role_changed`.
+- Migration 4 backfills explicit `Task → produces → Artifact` ownership from legacy `artifact_attached` events without creating new activity events.
 - `CreateSessionInputSchema` creates only a Session. `AssignSessionToTaskInputSchema` owns the `taskId`, `sessionId` and per-assignment `role` fields.
 - The Relation compatibility matrix is enforced before persistence: `Session → Task` for `defines`/`implements`/`reviews`, `Session → Artifact` for `reviews`/`produces`, `Task → Artifact` for `produces`, Task-to-Task workflow links, Session-to-Session continuation and Artifact/Task derivation.
 - Parent changes use a guarded recursive CTE to reject any ancestor cycle before the write.

@@ -479,6 +479,13 @@ export class WorkDeckDatabase {
       });
       hardenEvents();
     }
+    if (!applied.has(4)) {
+      const backfillArtifactOwnership = this.sqlite.transaction(() => {
+        this.migrateArtifactOwnershipFromEvents();
+        this.sqlite.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?)").run(now());
+      });
+      backfillArtifactOwnership();
+    }
   }
 
   close() {
@@ -980,6 +987,26 @@ export class WorkDeckDatabase {
       }
     });
     backfill();
+  }
+
+  private migrateArtifactOwnershipFromEvents() {
+    const events = this.sqlite
+      .prepare("SELECT task_id, payload_json, created_at FROM task_events WHERE event_type = 'artifact_attached' ORDER BY created_at ASC")
+      .all() as Array<{ task_id: string; payload_json: string; created_at: string }>;
+    const taskProject = this.sqlite.prepare("SELECT project_id FROM tasks WHERE id = ?");
+    const artifactProject = this.sqlite.prepare("SELECT project_id FROM artifacts WHERE id = ?");
+    const insertOwnership = this.sqlite.prepare(
+      "INSERT OR IGNORE INTO relations (id, source_type, source_id, target_type, target_id, relation_type, metadata_json, created_at) VALUES (?, 'task', ?, 'artifact', ?, 'produces', NULL, ?)",
+    );
+
+    for (const event of events) {
+      const artifactId = parseRecord(event.payload_json).artifactId;
+      if (typeof artifactId !== "string" || !artifactId.trim()) continue;
+      const task = taskProject.get(event.task_id) as { project_id: string } | undefined;
+      const artifact = artifactProject.get(artifactId) as { project_id: string } | undefined;
+      if (!task || !artifact || task.project_id !== artifact.project_id) continue;
+      insertOwnership.run(`migration-004-artifact-ownership:${event.task_id}:${artifactId}`, event.task_id, artifactId, event.created_at);
+    }
   }
 
   private listAssignmentsForSession(sessionId: string): SessionAssignment[] {
