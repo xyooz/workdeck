@@ -24,11 +24,11 @@ MCP handlers call `WorkDeckService`, then map results through `packages/app-cont
 
 `board.get`, `task.get` and `inbox.get` advertise `ui://` resources using the current nested `ui.resourceUri` metadata and also include `openai/outputTemplate` for compatibility with existing OpenAI clients. The same tools remain useful without rendering a widget, and the structured payload is always retained. The local UI bundle is self-contained and does not load a remote script.
 
-The UI now uses a standards-first bridge in `apps/chatgpt-ui/src/bridge.ts`: it performs `ui/initialize`, acknowledges with `ui/notifications/initialized`, consumes `ui/notifications/tool-input` and `ui/notifications/tool-result`, proxies server calls with `tools/call`, and sends chat actions with `ui/message`. `window.openai` is consulted only when the standard bridge is unavailable, preserving compatibility without making the widget ChatGPT-specific.
+The UI now uses a standards-first bridge in `apps/chatgpt-ui/src/bridge.ts`: it performs `ui/initialize`, acknowledges with `ui/notifications/initialized`, consumes `ui/notifications/tool-input` and `ui/notifications/tool-result`, proxies server calls with `tools/call`, and sends chat actions with `ui/message`. The adapter imports `LATEST_PROTOCOL_VERSION` and the request types from `@modelcontextprotocol/ext-apps@1.7.5`; `window.openai` is consulted only when the standard bridge is unavailable, preserving compatibility without making the widget ChatGPT-specific. The raw bridge remains intentionally small because the official package's full `App` class is not needed for this guest-side adapter.
 
 ### Local MCP request protection
 
-The MCP Express app uses the official SDK `localhostHostValidation()` middleware for DNS-rebinding protection. It also rejects non-loopback browser Origins by default instead of reflecting arbitrary Origins. Explicit future origins can be supplied through `MCP_ALLOWED_ORIGINS` as a comma-separated allowlist; this does not add authentication or authorization.
+The MCP Express app uses the official SDK `localhostHostValidation()` middleware for DNS-rebinding protection. It also rejects non-loopback browser Origins by default instead of reflecting arbitrary Origins. `MCP_ALLOWED_ORIGINS` is only a comma-separated allowlist for Origins on the local HTTP boundary; it is not a Secure MCP Tunnel requirement and does not add authentication or authorization. When using a tunnel, do not assume a ChatGPT browser Origin reaches the loopback server directly. Leave the variable unset unless the tunnel's local request path actually includes an Origin that needs an exact allowlist entry.
 
 ### Shared SQLite reliability
 
@@ -40,4 +40,4 @@ The API and MCP server bind to `127.0.0.1`. The prototype has no public endpoint
 
 ### Deferred platform integration
 
-This phase does not depend on a ChatGPT conversation ID, dispatch external Codex work, ingest provider history, connect GitHub or expose the endpoint publicly. A future ChatGPT developer-mode test may use Secure MCP Tunnel; production/public integration will require the separate HTTPS and authentication work described by the official OpenAI documentation.
+This phase does not depend on a ChatGPT conversation ID, dispatch external Codex work, ingest provider history, connect GitHub or expose the endpoint publicly. A future ChatGPT developer-mode test may use `tunnel-client` with Secure MCP Tunnel, which provides a separate outbound connection path while the local MCP server remains private. Production/public integration will require the separate HTTPS and authentication work described by the official OpenAI documentation.

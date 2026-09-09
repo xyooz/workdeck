@@ -57,6 +57,8 @@ body { margin: 0; background: #f8f8fb; }
 .wd-badge.waiting { color: #8a631d; background: #fff7df; }
 .wd-badge.active { color: #2c7b5b; background: #e9f8f0; }
 .wd-error { color: #b04b36; font-size: 12px; }
+.wd-notice { margin: 10px 0 0; border-radius: 10px; padding: 10px 12px; color: #3d318d; background: #efedff; font-size: 12px; line-height: 1.4; }
+.wd-notice.error { color: #8d3828; background: #fff0eb; }
 @media (max-width: 420px) { .wd-card { padding: 8px; } .wd-body { padding: 14px; } }
 `;
 
@@ -152,31 +154,34 @@ async function sendHostMessage(bridge: McpAppsBridge, bridgeReady: Promise<boole
 }
 
 async function copyText(text: string) {
-  if (navigator.clipboard) await navigator.clipboard.writeText(text);
+  if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable");
+  await navigator.clipboard.writeText(text);
 }
 
 export function mountWorkDeckWidget() {
   const root = document.getElementById("root");
   if (!root) return;
   let mode = window.__WORKDECK_WIDGET_MODE__ ?? "board";
-  let latestToolInput: unknown;
-  let latestToolOutput: unknown;
+  let currentOutput = structuredOutput(fallbackOutput());
+  let notice: { message: string; tone: "info" | "error" } | null = null;
   const bridge = new McpAppsBridge(window);
   const bridgeReady = bridge.connect();
   const render = (output: unknown) => {
-    root.innerHTML = `<style>${style}</style><div class="wd-card">${renderWidgetMarkup(mode, output)}</div>`;
+    currentOutput = output;
+    const noticeMarkup = notice ? `<div class="wd-notice ${notice.tone}" role="status" aria-live="polite">${escapeHtml(notice.message)}</div>` : "";
+    root.innerHTML = `<style>${style}</style><div class="wd-card">${renderWidgetMarkup(mode, output)}${noticeMarkup}</div>`;
+  };
+  const setNotice = (message: string, tone: "info" | "error" = "info") => {
+    notice = { message, tone };
+    render(currentOutput);
   };
   const renderToolResult = (value: unknown) => {
     const output = structuredOutput(value);
     if (!Object.keys(asRecord(output)).length) return;
-    latestToolOutput = output;
     render(output);
   };
-  bridge.onToolInput = (params) => {
-    latestToolInput = params;
-  };
   bridge.onToolResult = renderToolResult;
-  render(structuredOutput(fallbackOutput()));
+  render(currentOutput);
 
   root.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-action]") : null;
@@ -196,8 +201,17 @@ export function mountWorkDeckWidget() {
     if (action === "handoff") {
       void callHostTool(bridge, bridgeReady, "handoff.generate", { taskId }).then(async (result) => {
         const markdown = asRecord(structuredOutput(result)).markdown;
-        if (typeof markdown === "string") await copyText(markdown);
-      });
+        if (typeof markdown !== "string") {
+          setNotice("Handoff could not be generated.", "error");
+          return;
+        }
+        try {
+          await copyText(markdown);
+          setNotice("Handoff copied to clipboard.");
+        } catch {
+          setNotice("Handoff generated, but clipboard access was unavailable.", "error");
+        }
+      }).catch(() => setNotice("Handoff could not be generated.", "error"));
     }
   });
 
@@ -206,8 +220,6 @@ export function mountWorkDeckWidget() {
   });
 
   void bridgeReady;
-  void latestToolInput;
-  void latestToolOutput;
 }
 
 if (typeof document !== "undefined") mountWorkDeckWidget();

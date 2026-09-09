@@ -32,7 +32,7 @@ npm run dev:mcp
 
 The API is available at `http://127.0.0.1:4100`; the MCP endpoint is `http://127.0.0.1:4200/mcp`. Both processes seed the demo project idempotently. Set `PORT` or `MCP_PORT` if either port is already in use.
 
-The local MCP server accepts requests without an Origin header and accepts loopback browser Origins only. If a supported developer-mode host uses a non-loopback Origin through a tunnel, set an explicit allowlist before starting MCP, for example `MCP_ALLOWED_ORIGINS="https://chatgpt.com" npm run dev:mcp`; keep that value scoped to the host you actually use.
+The local MCP server accepts requests without an Origin header and accepts loopback browser Origins only. `MCP_ALLOWED_ORIGINS` is only the local HTTP Origin allowlist; it is not a Secure MCP Tunnel requirement. Do not preconfigure `https://chatgpt.com` or assume that a ChatGPT browser Origin is forwarded to localhost. If `tunnel-client` actually sends an Origin to the local MCP server, add only that observed exact Origin before starting MCP; otherwise leave the variable unset.
 
 Quick checks:
 
@@ -63,7 +63,7 @@ Inside a compatible MCP Apps host, the widget starts with `ui/initialize`, recei
 
 ## 4. Optional ChatGPT developer-mode test
 
-The local `127.0.0.1` endpoint is not directly a public ChatGPT app endpoint. For a supported developer-mode connection, use an approved HTTPS exposure method such as Secure MCP Tunnel and keep the tunnel scoped to this disposable local server. Do not commit tokens, tunnel credentials or public URLs. Verify tool discovery and read-only rendering before testing mutations.
+The local `127.0.0.1` endpoint is not directly a public ChatGPT app endpoint. For supported developer-mode testing, use Secure MCP Tunnel: run `tunnel-client` in the same local trust boundary, point it at this MCP server, and keep the tunnel scoped to this disposable database. The tunnel is configured separately from `MCP_ALLOWED_ORIGINS` and keeps the local server private. Do not commit tokens, tunnel credentials or public URLs. Verify tunnel readiness, tool discovery and read-only rendering before testing mutations.
 
 ## 5. Cleanup
 

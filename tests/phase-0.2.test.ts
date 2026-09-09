@@ -5,11 +5,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  McpUiInitializeRequestSchema,
+  McpUiMessageRequestSchema,
+} from "@modelcontextprotocol/ext-apps";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createApp, WorkDeckService } from "@workdeck/api";
 import { WorkDeckDatabase } from "@workdeck/db";
-import { McpAppsBridge } from "../apps/chatgpt-ui/src/bridge.js";
+import { MCP_APPS_REQUEST_TIMEOUTS, McpAppsBridge } from "../apps/chatgpt-ui/src/bridge.js";
 import { createMcpApp, isAllowedMcpOrigin } from "../apps/mcp/src/server.js";
 import { createWorkDeckMcpServer, UI_RESOURCE_URIS } from "../apps/mcp/src/tools.js";
 
@@ -104,13 +109,29 @@ describe("WorkDeck Phase 0.2 MCP contracts", () => {
       postMessage(message: unknown) {
         const packet = message as Record<string, any>;
         sent.push(packet);
+        expect(packet.jsonrpc).toBe("2.0");
         if (packet.method === "ui/initialize") {
+          const request = McpUiInitializeRequestSchema.parse(packet);
+          expect(request.params).toEqual(
+            expect.objectContaining({
+              appInfo: { name: "WorkDeck", version: "0.2.0" },
+              appCapabilities: { availableDisplayModes: ["inline"] },
+              protocolVersion: "2026-01-26",
+            }),
+          );
+          expect(typeof packet.id).toBe("number");
           queueMicrotask(() => listener?.({ source: parentWindow, data: { jsonrpc: "2.0", id: packet.id, result: { hostInfo: { name: "test-host" } } } } as MessageEvent));
         }
         if (packet.method === "tools/call") {
+          const request = CallToolRequestSchema.parse(packet);
+          expect(request.params).toEqual({ name: "task.get", arguments: { taskId: "task-a" } });
+          expect(typeof packet.id).toBe("number");
           queueMicrotask(() => listener?.({ source: parentWindow, data: { jsonrpc: "2.0", id: packet.id, result: { structuredContent: { ok: true } } } } as MessageEvent));
         }
         if (packet.method === "ui/message") {
+          const request = McpUiMessageRequestSchema.parse(packet);
+          expect(request.params).toEqual({ role: "user", content: [{ type: "text", text: "Open task-a in chat." }] });
+          expect(typeof packet.id).toBe("number");
           queueMicrotask(() => listener?.({ source: parentWindow, data: { jsonrpc: "2.0", id: packet.id, result: {} } } as MessageEvent));
         }
       },
@@ -133,6 +154,7 @@ describe("WorkDeck Phase 0.2 MCP contracts", () => {
     };
 
     await expect(bridge.connect()).resolves.toBe(true);
+    expect(MCP_APPS_REQUEST_TIMEOUTS).toEqual({ "ui/initialize": 10_000, "tools/call": 30_000, "ui/message": 30_000 });
     expect(sent.map((message) => message.method)).toEqual(["ui/initialize", "ui/notifications/initialized"]);
     listener?.({ source: parentWindow, data: { jsonrpc: "2.0", method: "ui/notifications/tool-input", params: { arguments: { taskId: "task-a" } } } } as MessageEvent);
     listener?.({ source: parentWindow, data: { jsonrpc: "2.0", method: "ui/notifications/tool-result", params: { structuredContent: { task: { id: "task-a" } } } } } as MessageEvent);
@@ -308,6 +330,13 @@ describe("WorkDeck Phase 0.2 MCP contracts", () => {
         expect.objectContaining({ uri: UI_RESOURCE_URIS.board, mimeType: "text/html;profile=mcp-app" }),
       );
       expect((resource.contents[0] as { text?: string }).text).toContain("__WORKDECK_TEST__");
+      const taskResource = await client.readResource({ uri: UI_RESOURCE_URIS.task });
+      expect((taskResource.contents[0] as any)._meta).toEqual(
+        expect.objectContaining({
+          ui: expect.objectContaining({ prefersBorder: true, permissions: { clipboardWrite: {} } }),
+        }),
+      );
+      expect((resource.contents[0] as any)._meta.ui).not.toHaveProperty("permissions");
       void service;
       void artifactA;
     });

@@ -102,13 +102,19 @@ async function safely<T>(handler: () => T | Promise<T>): Promise<T | ToolResult>
 }
 
 function registerResource(server: McpServer, name: string, uri: string, mode: WidgetMode, component: string) {
+  const resourceMeta = {
+    ui: {
+      prefersBorder: true,
+      ...(mode === "task" ? { permissions: { clipboardWrite: {} } } : {}),
+    },
+  };
   server.registerResource(name, uri, {}, async () => ({
     contents: [
       {
         uri,
         mimeType: RESOURCE_MIME_TYPE,
         text: `<div id="root"></div><script>window.__WORKDECK_WIDGET_MODE__=${JSON.stringify(mode)};</script><script type="module">${component}</script>`,
-        _meta: { ui: { prefersBorder: true } },
+        _meta: resourceMeta,
       },
     ],
   }));

@@ -99,4 +99,4 @@ Phase 0.4   Mobile companion
 - Relations are displayed as a list. A graph view is out of scope.
 - Sessions and Artifacts are entered manually; no connector synchronizes external systems yet.
 - This is a single-user, local-only board.
-- The MCP endpoint is local-only in this prototype. A remote ChatGPT connection needs a separately configured HTTPS endpoint or Secure MCP Tunnel; no public exposure or authentication platform is included yet.
+- The MCP endpoint is local-only in this prototype. A remote ChatGPT connection needs a separately configured HTTPS endpoint or Secure MCP Tunnel; `MCP_ALLOWED_ORIGINS` only controls local HTTP Origin validation and is not tunnel configuration. No public exposure or authentication platform is included yet.

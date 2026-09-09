@@ -1,4 +1,18 @@
+import {
+  LATEST_PROTOCOL_VERSION,
+  type McpUiInitializeRequest,
+  type McpUiMessageRequest,
+} from "@modelcontextprotocol/ext-apps";
+
 export type JsonRpcId = number | string;
+
+export const MCP_APPS_REQUEST_TIMEOUTS = {
+  "ui/initialize": 10_000,
+  "tools/call": 30_000,
+  "ui/message": 30_000,
+} as const;
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 type JsonRpcMessage = {
   jsonrpc?: unknown;
@@ -21,7 +35,7 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 export class McpAppsBridge {
   private readonly parentWindow: Window;
   private readonly embedded: boolean;
-  private readonly timeoutMs: number;
+  private readonly timeoutOverrideMs?: number;
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
   private nextRequestId = 1;
   private connectionPromise: Promise<boolean> | null = null;
@@ -31,10 +45,10 @@ export class McpAppsBridge {
   onToolInput?: (params: unknown) => void;
   onToolResult?: (params: unknown) => void;
 
-  constructor(private readonly hostWindow: Window, timeoutMs = 1500) {
+  constructor(private readonly hostWindow: Window, timeoutOverrideMs?: number) {
     this.parentWindow = hostWindow.parent;
     this.embedded = this.parentWindow !== hostWindow;
-    this.timeoutMs = timeoutMs;
+    this.timeoutOverrideMs = timeoutOverrideMs;
     if (this.embedded) hostWindow.addEventListener("message", this.messageHandler, { passive: true });
   }
 
@@ -53,10 +67,11 @@ export class McpAppsBridge {
   }
 
   sendMessage(text: string) {
-    return this.request("ui/message", {
+    const params: McpUiMessageRequest["params"] = {
       role: "user",
-      content: { type: "text", text },
-    });
+      content: [{ type: "text", text }],
+    };
+    return this.request("ui/message", params);
   }
 
   dispose() {
@@ -72,10 +87,12 @@ export class McpAppsBridge {
 
   private async initialize() {
     try {
-      await this.request("ui/initialize", {
+      const params: McpUiInitializeRequest["params"] = {
         appInfo: { name: "WorkDeck", version: "0.2.0" },
         appCapabilities: { availableDisplayModes: ["inline"] },
-      });
+        protocolVersion: LATEST_PROTOCOL_VERSION,
+      };
+      await this.request("ui/initialize", params);
       this.connected = true;
       this.notify("ui/notifications/initialized");
       return true;
@@ -98,10 +115,11 @@ export class McpAppsBridge {
 
     const id = this.nextRequestId++;
     return new Promise<T>((resolve, reject) => {
+      const timeoutMs = this.timeoutOverrideMs ?? MCP_APPS_REQUEST_TIMEOUTS[method as keyof typeof MCP_APPS_REQUEST_TIMEOUTS] ?? DEFAULT_REQUEST_TIMEOUT_MS;
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`MCP Apps request timed out: ${method}`));
-      }, this.timeoutMs);
+      }, timeoutMs);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timeout });
       try {
         this.parentWindow.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
