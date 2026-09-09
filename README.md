@@ -8,17 +8,14 @@ It is designed for projects where multiple ChatGPT, Codex, Claude or local sessi
 
 ```text
 Project
-  ↓
-Task
-  ↓
-Session
-  ↓
-Artifact
-
-Relation connects all entities.
+  ├─ Task ──┐
+  ├─ Session │ TaskSession assignments carry the per-task role
+  └─ Artifact┘
+       └──── explicit Task → produces → Artifact ownership
 ```
 
 The model is intentionally provider-neutral. A Session is a work session, not a hard-coded ChatGPT or Codex object. Relations such as `implements`, `reviews`, `produces`, `depends_on`, `blocks` and `fixes` preserve the delivery graph without turning it into a graph-database dependency.
+Relation endpoint semantics are validated in the Domain package. A Task only lists Artifacts with an explicit `Task → produces → Artifact` ownership relation; a shared Session never leaks another Task's Artifacts or activity into the current Task context.
 
 ## Current scope
 
@@ -28,7 +25,10 @@ Phase 0.1.1 includes:
 - SQLite persistence with an explicit migration
 - Parent/child Tasks and task event history
 - Many-to-many Task–Session assignments with a role per assignment
+- Task-context isolation for shared Sessions, Artifacts, Relations and Handoffs
+- Relation compatibility matrix enforced in the Domain layer
 - Recursive parent-cycle protection and idempotent activity events
+- Separate Session creation and Task assignment schemas, including role-change events
 - Loopback-only API binding for the local single-user app
 - PC Workboard grouped by task status
 - Task Detail for Sessions, Artifacts, Relations, events and editable handoff context

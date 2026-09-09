@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import {
   ArtifactTypeSchema,
+  AssignSessionToTaskInputSchema,
   CreateArtifactInputSchema,
   CreateProjectInputSchema,
   CreateRelationInputSchema,
@@ -19,6 +20,7 @@ import {
   TaskStatusSchema,
   UpdateTaskInputSchema,
   type Artifact,
+  type AssignSessionToTaskInput,
   type CreateArtifactInput,
   type CreateProjectInput,
   type CreateRelationInput,
@@ -190,7 +192,7 @@ CREATE TABLE IF NOT EXISTS relations (
 CREATE TABLE IF NOT EXISTS task_events (
   id TEXT PRIMARY KEY NOT NULL,
   task_id TEXT NOT NULL,
-  event_type TEXT NOT NULL CHECK (event_type IN ('task_created', 'status_changed', 'session_linked', 'artifact_attached', 'relation_created')),
+  event_type TEXT NOT NULL CHECK (event_type IN ('task_created', 'status_changed', 'session_linked', 'session_role_changed', 'artifact_attached', 'relation_created')),
   payload_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
@@ -300,6 +302,25 @@ BEGIN
   WHERE (source_type = 'session' AND source_id = OLD.id)
      OR (target_type = 'session' AND target_id = OLD.id);
 END;
+`;
+
+const MIGRATION_003 = `
+CREATE TABLE task_events_v3 (
+  id TEXT PRIMARY KEY NOT NULL,
+  task_id TEXT NOT NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN ('task_created', 'status_changed', 'session_linked', 'session_role_changed', 'artifact_attached', 'relation_created')),
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+INSERT INTO task_events_v3 (id, task_id, event_type, payload_json, created_at)
+SELECT id, task_id, event_type, payload_json, created_at
+FROM task_events;
+
+DROP TABLE task_events;
+ALTER TABLE task_events_v3 RENAME TO task_events;
+CREATE INDEX IF NOT EXISTS idx_task_events_task_created ON task_events(task_id, created_at DESC);
 `;
 
 const now = () => new Date().toISOString();
@@ -450,6 +471,13 @@ export class WorkDeckDatabase {
         this.sqlite.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)").run(now());
       });
       harden();
+    }
+    if (!applied.has(3)) {
+      const hardenEvents = this.sqlite.transaction(() => {
+        this.sqlite.exec(MIGRATION_003);
+        this.sqlite.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)").run(now());
+      });
+      hardenEvents();
     }
   }
 
@@ -665,22 +693,19 @@ export class WorkDeckDatabase {
 
   createSession(input: CreateSessionInput, id = randomUUID()): Session {
     const parsed = CreateSessionInputSchema.parse(input);
-    const project = this.assertProject(parsed.projectId);
-    if (parsed.taskId) {
-      const task = this.assertTask(parsed.taskId);
-      if (task.projectId !== project.id) throw new DomainError("Session task must belong to the same project");
-    }
+    this.assertProject(parsed.projectId);
     const timestamp = now();
-    const create = this.sqlite.transaction(() => {
-      this.sqlite
-        .prepare(
-          "INSERT INTO sessions (id, project_id, name, provider, status, external_ref, external_url, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .run(id, parsed.projectId, parsed.name, parsed.provider, parsed.status, parsed.externalRef ?? null, parsed.externalUrl ?? null, parsed.summary ?? null, timestamp, timestamp);
-      if (parsed.taskId) this.assignSessionToTaskWithinTransaction(id, parsed.taskId, parsed.role, timestamp);
-    });
-    create();
+    this.sqlite
+      .prepare(
+        "INSERT INTO sessions (id, project_id, name, provider, status, external_ref, external_url, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(id, parsed.projectId, parsed.name, parsed.provider, parsed.status, parsed.externalRef ?? null, parsed.externalUrl ?? null, parsed.summary ?? null, timestamp, timestamp);
     return this.getSession(id)!;
+  }
+
+  assignSessionToTask(input: AssignSessionToTaskInput): TaskSession {
+    const parsed = AssignSessionToTaskInputSchema.parse(input);
+    return this.linkSessionToTask(parsed.sessionId, parsed.taskId, parsed.role);
   }
 
   linkSessionToTask(sessionId: string, taskId: string, role: TaskSession["role"] = "implementer"): TaskSession {
@@ -708,13 +733,12 @@ export class WorkDeckDatabase {
          FROM artifacts a
          JOIN relations r ON r.target_type = 'artifact' AND r.target_id = a.id
          WHERE a.project_id = ?
-           AND ((r.source_type = 'task' AND r.source_id = ?)
-             OR (r.source_type = 'session' AND EXISTS (
-               SELECT 1 FROM task_sessions ts WHERE ts.session_id = r.source_id AND ts.task_id = ?
-             )))
+           AND r.source_type = 'task'
+           AND r.source_id = ?
+           AND r.relation_type = 'produces'
          ORDER BY a.created_at DESC`,
       )
-      .all(task.projectId, taskId, taskId) as ArtifactRow[];
+      .all(task.projectId, taskId) as ArtifactRow[];
     return rows.map(toArtifact);
   }
 
@@ -771,6 +795,49 @@ export class WorkDeckDatabase {
     return rows.map(toRelation);
   }
 
+  listRelationsForTask(taskId: string): Relation[] {
+    this.assertTask(taskId);
+    const rows = this.sqlite
+      .prepare(
+        `WITH entity_task_context(entity_type, entity_id, task_id) AS (
+           SELECT 'task', id, id
+           FROM tasks
+           UNION ALL
+           SELECT 'session', session_id, task_id
+           FROM task_sessions
+           UNION ALL
+           SELECT 'artifact', target_id, source_id
+           FROM relations
+           WHERE source_type = 'task'
+             AND target_type = 'artifact'
+             AND relation_type = 'produces'
+         )
+         SELECT DISTINCT r.*
+         FROM relations r
+         WHERE (r.source_type = 'task' AND r.source_id = ?)
+            OR (r.target_type = 'task' AND r.target_id = ?)
+            OR (
+              EXISTS (
+                SELECT 1
+                FROM entity_task_context source_context
+                WHERE source_context.entity_type = r.source_type
+                  AND source_context.entity_id = r.source_id
+                  AND source_context.task_id = ?
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM entity_task_context target_context
+                WHERE target_context.entity_type = r.target_type
+                  AND target_context.entity_id = r.target_id
+                  AND target_context.task_id = ?
+              )
+            )
+         ORDER BY r.created_at DESC`,
+      )
+      .all(taskId, taskId, taskId, taskId) as RelationRow[];
+    return rows.map(toRelation);
+  }
+
   createRelation(input: CreateRelationInput, id = randomUUID()): Relation {
     const parsed = CreateRelationInputSchema.parse(input);
     if (parsed.sourceType === parsed.targetType && parsed.sourceId === parsed.targetId) {
@@ -779,29 +846,26 @@ export class WorkDeckDatabase {
     const sourceProjectId = this.entityProjectId(parsed.sourceType, parsed.sourceId);
     const targetProjectId = this.entityProjectId(parsed.targetType, parsed.targetId);
     if (sourceProjectId !== targetProjectId) throw new DomainError("Relation entities must belong to the same project");
-    const timestamp = now();
-    const insert = this.sqlite.prepare(
-      "INSERT OR IGNORE INTO relations (id, source_type, source_id, target_type, target_id, relation_type, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    );
-    const result = insert.run(id, parsed.sourceType, parsed.sourceId, parsed.targetType, parsed.targetId, parsed.relationType, parsed.metadata ? JSON.stringify(parsed.metadata) : null, timestamp);
-    const row = this.sqlite
-      .prepare("SELECT * FROM relations WHERE source_type = ? AND source_id = ? AND target_type = ? AND target_id = ? AND relation_type = ?")
-      .get(parsed.sourceType, parsed.sourceId, parsed.targetType, parsed.targetId, parsed.relationType) as RelationRow;
-    const relation = toRelation(row);
-    if (result.changes) {
-      const taskIds = new Set<string>();
-      if (parsed.sourceType === "task") taskIds.add(parsed.sourceId);
-      if (parsed.targetType === "task") taskIds.add(parsed.targetId);
-      if (parsed.sourceType === "session") this.taskIdsForSession(parsed.sourceId).forEach((taskId) => taskIds.add(taskId));
-      if (parsed.targetType === "session") this.taskIdsForSession(parsed.targetId).forEach((taskId) => taskIds.add(taskId));
-      if (parsed.sourceType === "artifact") this.taskIdsForArtifact(parsed.sourceId).forEach((taskId) => taskIds.add(taskId));
-      if (parsed.targetType === "artifact") this.taskIdsForArtifact(parsed.targetId).forEach((taskId) => taskIds.add(taskId));
-      for (const taskId of taskIds) {
-        this.sqlite.prepare("UPDATE tasks SET updated_at = ? WHERE id = ?").run(timestamp, taskId);
-        this.recordEvent(taskId, "relation_created", { relationId: relation.id, relationType: relation.relationType, sourceType: relation.sourceType, sourceId: relation.sourceId, targetType: relation.targetType, targetId: relation.targetId });
+    const create = this.sqlite.transaction(() => {
+      const timestamp = now();
+      const result = this.sqlite
+        .prepare(
+          "INSERT OR IGNORE INTO relations (id, source_type, source_id, target_type, target_id, relation_type, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(id, parsed.sourceType, parsed.sourceId, parsed.targetType, parsed.targetId, parsed.relationType, parsed.metadata ? JSON.stringify(parsed.metadata) : null, timestamp);
+      const row = this.sqlite
+        .prepare("SELECT * FROM relations WHERE source_type = ? AND source_id = ? AND target_type = ? AND target_id = ? AND relation_type = ?")
+        .get(parsed.sourceType, parsed.sourceId, parsed.targetType, parsed.targetId, parsed.relationType) as RelationRow;
+      const relation = toRelation(row);
+      if (result.changes) {
+        for (const taskId of this.taskIdsForRelation(parsed)) {
+          this.sqlite.prepare("UPDATE tasks SET updated_at = ? WHERE id = ?").run(timestamp, taskId);
+          this.recordEvent(taskId, "relation_created", { relationId: relation.id, relationType: relation.relationType, sourceType: relation.sourceType, sourceId: relation.sourceId, targetType: relation.targetType, targetId: relation.targetId });
+        }
       }
-    }
-    return relation;
+      return relation;
+    });
+    return create();
   }
 
   listTaskEvents(taskId: string): TaskEvent[] {
@@ -845,6 +909,7 @@ export class WorkDeckDatabase {
       const relationInsert = this.sqlite.prepare("INSERT INTO relations VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
       relationInsert.run("relation-architecture-defines", "session", "session-architecture", "task", "task-phase-2c", "defines", null, earlier(60));
       relationInsert.run("relation-codex-implements", "session", "session-codex-2c", "task", "task-phase-2c", "implements", null, earlier(6));
+      relationInsert.run("relation-task-2c-produces", "task", "task-phase-2c", "artifact", "artifact-ec565d5", "produces", null, earlier(8));
       relationInsert.run("relation-codex-produces", "session", "session-codex-2c", "artifact", "artifact-ec565d5", "produces", null, earlier(8));
       relationInsert.run("relation-review-reviews", "session", "session-independent-review", "artifact", "artifact-ec565d5", "reviews", null, earlier(3));
       relationInsert.run("relation-hardening-fixes", "task", "task-phase-2c-hardening", "task", "task-phase-2c", "fixes", null, earlier(3));
@@ -905,6 +970,14 @@ export class WorkDeckDatabase {
       for (const [id, goal, architectureNotes, reviewContext, acceptanceCriteria, constraints, nextStep] of updates) {
         update.run(goal, architectureNotes, reviewContext, acceptanceCriteria, constraints, nextStep, id);
       }
+      const demoArtifact = this.sqlite.prepare("SELECT created_at FROM artifacts WHERE id = ?").get("artifact-ec565d5") as { created_at: string } | undefined;
+      if (demoArtifact && this.getTask("task-phase-2c")) {
+        this.sqlite
+          .prepare(
+            "INSERT OR IGNORE INTO relations (id, source_type, source_id, target_type, target_id, relation_type, metadata_json, created_at) VALUES (?, 'task', ?, 'artifact', ?, 'produces', NULL, ?)",
+          )
+          .run("relation-task-2c-produces", "task-phase-2c", "artifact-ec565d5", demoArtifact.created_at);
+      }
     });
     backfill();
   }
@@ -933,7 +1006,7 @@ export class WorkDeckDatabase {
     }
     this.sqlite.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(timestamp, sessionId);
     this.sqlite.prepare("UPDATE tasks SET updated_at = ? WHERE id = ?").run(timestamp, taskId);
-    this.recordEvent(taskId, "session_linked", {
+    this.recordEvent(taskId, existing ? "session_role_changed" : "session_linked", {
       sessionId,
       role,
       previousRole: existing?.role ?? null,
@@ -951,14 +1024,32 @@ export class WorkDeckDatabase {
       .prepare(
         `SELECT source_id AS task_id
          FROM relations
-         WHERE source_type = 'task' AND target_type = 'artifact' AND target_id = ?
-         UNION
-         SELECT target_id AS task_id
-         FROM relations
-         WHERE source_type = 'artifact' AND target_type = 'task' AND source_id = ?`,
+         WHERE source_type = 'task'
+           AND target_type = 'artifact'
+           AND relation_type = 'produces'
+           AND target_id = ?`,
       )
-      .all(artifactId, artifactId) as Array<{ task_id: string }>;
+      .all(artifactId) as Array<{ task_id: string }>;
     return rows.map((row) => row.task_id);
+  }
+
+  private taskIdsForEntity(type: EntityType, id: string): string[] {
+    if (type === "task") return [id];
+    if (type === "session") return this.taskIdsForSession(id);
+    if (type === "artifact") return this.taskIdsForArtifact(id);
+    return [];
+  }
+
+  private taskIdsForRelation(relation: Pick<Relation, "sourceType" | "sourceId" | "targetType" | "targetId">): Set<string> {
+    const taskIds = new Set<string>();
+    if (relation.sourceType === "task") taskIds.add(relation.sourceId);
+    if (relation.targetType === "task") taskIds.add(relation.targetId);
+
+    const targetTaskIds = new Set(this.taskIdsForEntity(relation.targetType, relation.targetId));
+    for (const taskId of this.taskIdsForEntity(relation.sourceType, relation.sourceId)) {
+      if (targetTaskIds.has(taskId)) taskIds.add(taskId);
+    }
+    return taskIds;
   }
 
   private recordEvent(taskId: string, eventType: TaskEvent["eventType"], payload: Record<string, unknown>) {

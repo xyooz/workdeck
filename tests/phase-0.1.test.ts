@@ -36,9 +36,11 @@ describe("WorkDeck Phase 0.1 domain and persistence", () => {
     withDatabase((database) => {
       const project = database.createProject({ name: "Validation" });
       const task = database.createTask({ projectId: project.id, title: "Task" });
-      expect(() => database.createSession({ projectId: project.id, taskId: task.id, name: "Bad role", role: "operator" as never })).toThrow();
+      const session = database.createSession({ projectId: project.id, name: "Bad role" });
+      expect(() => database.assignSessionToTask({ taskId: task.id, sessionId: session.id, role: "operator" as never })).toThrow();
       expect(() => database.createRelation({ sourceType: "task", sourceId: task.id, targetType: "artifact", targetId: "missing", relationType: "produces" })).toThrow(/not found/);
       expect(() => database.createRelation({ sourceType: "task", sourceId: task.id, targetType: "task", targetId: task.id, relationType: "depends_on" })).toThrow(/itself/);
+      expect(() => database.createRelation({ sourceType: "artifact", sourceId: "missing", targetType: "session", targetId: session.id, relationType: "produces" })).toThrow(/does not allow/);
     });
   });
 
@@ -46,7 +48,8 @@ describe("WorkDeck Phase 0.1 domain and persistence", () => {
     withDatabase((database) => {
       const project = database.createProject({ name: "Events" });
       const task = database.createTask({ projectId: project.id, title: "Trace events" });
-      const session = database.createSession({ projectId: project.id, taskId: task.id, name: "Implementer", provider: "codex", role: "implementer" });
+      const session = database.createSession({ projectId: project.id, name: "Implementer", provider: "codex" });
+      database.assignSessionToTask({ taskId: task.id, sessionId: session.id, role: "implementer" });
       const artifact = database.createArtifactForTask(task.id, { type: "commit", title: "abc123", externalRef: "abc123" });
       database.updateTask(task.id, { status: "reviewing" });
       database.createRelation({ sourceType: "session", sourceId: session.id, targetType: "artifact", targetId: artifact.id, relationType: "produces" });
@@ -69,7 +72,7 @@ describe("WorkDeck Phase 0.1 domain and persistence", () => {
 
       const second = new WorkDeckDatabase(filePath);
       expect(second.isForeignKeysEnabled).toBe(true);
-      expect(second.migrationVersions).toEqual([1, 2]);
+      expect(second.migrationVersions).toEqual([1, 2, 3]);
       expect(second.getProject(project.id)?.name).toBe("Durable");
       expect(second.getTask(task.id)?.title).toBe("Persist me");
       expect(second.listRelationsForEntity("task", task.id).length).toBeGreaterThan(0);
@@ -99,7 +102,8 @@ describe("WorkDeck Phase 0.1 domain and persistence", () => {
         priority: "high",
       });
       database.createRelation({ sourceType: "task", sourceId: task.id, targetType: "task", targetId: dependency.id, relationType: "depends_on" });
-      const session = database.createSession({ projectId: project.id, taskId: task.id, name: "Codex implementer", provider: "codex", role: "implementer", summary: "Working on the next slice." });
+      const session = database.createSession({ projectId: project.id, name: "Codex implementer", provider: "codex", summary: "Working on the next slice." });
+      database.assignSessionToTask({ taskId: task.id, sessionId: session.id, role: "implementer" });
       const artifact = database.createArtifactForTask(task.id, { type: "commit", title: "abc123", externalRef: "abc123" });
       database.createRelation({ sourceType: "session", sourceId: session.id, targetType: "artifact", targetId: artifact.id, relationType: "produces" });
 
@@ -156,6 +160,7 @@ describe("WorkDeck Phase 0.1 domain and persistence", () => {
       CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_task_id TEXT, title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, priority TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT, name TEXT NOT NULL, provider TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL, external_ref TEXT, external_url TEXT, summary TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE relations (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL, target_type TEXT NOT NULL, target_id TEXT NOT NULL, relation_type TEXT NOT NULL, metadata_json TEXT, created_at TEXT NOT NULL);
+      CREATE TABLE task_events (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, event_type TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
       INSERT INTO projects VALUES ('p', 'Legacy', '', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
       INSERT INTO tasks VALUES ('t', 'p', NULL, 'Legacy task', '', 'implementing', 'medium', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
       INSERT INTO sessions VALUES ('s', 'p', 't', 'Long Chat', 'chatgpt', 'reviewer', 'active', NULL, NULL, NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
@@ -163,7 +168,7 @@ describe("WorkDeck Phase 0.1 domain and persistence", () => {
     legacy.close();
     try {
       const database = new WorkDeckDatabase(filePath);
-      expect(database.migrationVersions).toEqual([1, 2]);
+      expect(database.migrationVersions).toEqual([1, 2, 3]);
       expect(database.getSession("s")).not.toHaveProperty("role");
       expect(database.listSessionsForTask("t")[0]).toEqual(expect.objectContaining({ id: "s", taskId: "t", role: "reviewer" }));
       database.close();
@@ -204,6 +209,63 @@ describe("WorkDeck Phase 0.1 domain and persistence", () => {
       const afterFirstRelation = database.listTaskEvents(task.id).length;
       database.createRelation({ sourceType: "task", sourceId: task.id, targetType: "artifact", targetId: artifact.id, relationType: "derived_from" });
       expect(database.listTaskEvents(task.id)).toHaveLength(afterFirstRelation);
+    });
+  });
+
+  it("isolates Task context across a shared session and keeps relation activity scoped", () => {
+    withDatabase((database) => {
+      const project = database.createProject({ name: "Context isolation" });
+      const taskA = database.createTask({ projectId: project.id, title: "Task A" });
+      const taskB = database.createTask({ projectId: project.id, title: "Task B" });
+      const session = database.createSession({ projectId: project.id, name: "Long-lived Chat", provider: "chatgpt" });
+      database.assignSessionToTask({ taskId: taskA.id, sessionId: session.id, role: "architect" });
+      database.assignSessionToTask({ taskId: taskB.id, sessionId: session.id, role: "reviewer" });
+      const artifactA = database.createArtifactForTask(taskA.id, { type: "commit", title: "commit-A" });
+      const artifactB = database.createArtifactForTask(taskB.id, { type: "commit", title: "commit-B" });
+
+      const eventsBeforeA = database.listTaskEvents(taskA.id).length;
+      const eventsBeforeB = database.listTaskEvents(taskB.id).length;
+      const relationA = database.createRelation({ sourceType: "session", sourceId: session.id, targetType: "artifact", targetId: artifactA.id, relationType: "reviews" });
+
+      expect(database.listArtifactsForTask(taskA.id).map((artifact) => artifact.title)).toEqual(["commit-A"]);
+      expect(database.listArtifactsForTask(taskB.id).map((artifact) => artifact.title)).toEqual(["commit-B"]);
+      expect(database.listTaskEvents(taskA.id)).toHaveLength(eventsBeforeA + 1);
+      expect(database.listTaskEvents(taskA.id).some((event) => event.eventType === "relation_created" && event.payload.relationId === relationA.id)).toBe(true);
+      expect(database.listTaskEvents(taskB.id)).toHaveLength(eventsBeforeB);
+
+      const service = new WorkDeckService(database);
+      const detailA = service.getTaskDetail(taskA.id);
+      const detailB = service.getTaskDetail(taskB.id);
+      expect(detailA.artifacts.map((artifact) => artifact.title)).toEqual(["commit-A"]);
+      expect(detailB.artifacts.map((artifact) => artifact.title)).toEqual(["commit-B"]);
+      expect(detailA.relations.map((relation) => relation.id)).toContain(relationA.id);
+      expect(detailB.relations.map((relation) => relation.id)).not.toContain(relationA.id);
+      expect(service.getHandoff(taskA.id).markdown).toContain("commit-A");
+      expect(service.getHandoff(taskA.id).markdown).not.toContain("commit-B");
+      expect(service.getHandoff(taskB.id).markdown).toContain("commit-B");
+      expect(service.getHandoff(taskB.id).markdown).not.toContain("commit-A");
+
+      database.createRelation({ sourceType: "session", sourceId: session.id, targetType: "artifact", targetId: artifactB.id, relationType: "reviews" });
+      expect(database.listTaskEvents(taskA.id)).toHaveLength(eventsBeforeA + 1);
+      expect(database.listTaskEvents(taskB.id)).toHaveLength(eventsBeforeB + 1);
+    });
+  });
+
+  it("records a role change separately from a new session assignment", () => {
+    withDatabase((database) => {
+      const project = database.createProject({ name: "Role events" });
+      const task = database.createTask({ projectId: project.id, title: "Review task" });
+      const session = database.createSession({ projectId: project.id, name: "Review Chat", provider: "chatgpt" });
+
+      database.assignSessionToTask({ taskId: task.id, sessionId: session.id, role: "architect" });
+      database.assignSessionToTask({ taskId: task.id, sessionId: session.id, role: "reviewer" });
+
+      expect(database.listTaskEvents(task.id).map((event) => event.eventType)).toEqual(
+        expect.arrayContaining(["session_linked", "session_role_changed"]),
+      );
+      expect(database.listTaskEvents(task.id).find((event) => event.eventType === "session_role_changed")?.payload).toEqual(
+        expect.objectContaining({ sessionId: session.id, previousRole: "architect", role: "reviewer" }),
+      );
     });
   });
 });

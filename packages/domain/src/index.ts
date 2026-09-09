@@ -30,6 +30,7 @@ export const TASK_EVENT_TYPES = [
   "task_created",
   "status_changed",
   "session_linked",
+  "session_role_changed",
   "artifact_attached",
   "relation_created",
 ] as const;
@@ -91,19 +92,56 @@ export const UpdateTaskInputSchema = z
     priority: PrioritySchema.optional(),
     parentTaskId: id.optional().nullable(),
   })
-  .refine((value) => Object.keys(value).length > 0, "at least one task field is required");
+    .refine((value) => Object.keys(value).length > 0, "at least one task field is required");
 
-export const CreateSessionInputSchema = z.object({
-  projectId: id,
-  taskId: id.optional().nullable(),
-  name: z.string().trim().min(1).max(160),
-  provider: ProviderSchema.default("other"),
-  role: SessionRoleSchema.default("implementer"),
-  status: SessionStatusSchema.default("active"),
-  externalRef: optionalText(240),
-  externalUrl: optionalText(1000),
-  summary: optionalText(4000),
-});
+export const RELATION_COMPATIBILITY = {
+  defines: [["session", "task"]],
+  implements: [["session", "task"]],
+  reviews: [
+    ["session", "task"],
+    ["session", "artifact"],
+  ],
+  produces: [
+    ["session", "artifact"],
+    ["task", "artifact"],
+  ],
+  continues: [["session", "session"]],
+  depends_on: [["task", "task"]],
+  blocks: [["task", "task"]],
+  fixes: [["task", "task"]],
+  derived_from: [
+    ["task", "task"],
+    ["task", "artifact"],
+    ["artifact", "task"],
+    ["artifact", "artifact"],
+  ],
+} as const satisfies Record<RelationType, readonly (readonly [EntityType, EntityType])[]>;
+
+export function isRelationCompatible(sourceType: EntityType, targetType: EntityType, relationType: RelationType) {
+  return RELATION_COMPATIBILITY[relationType].some(([allowedSource, allowedTarget]) => allowedSource === sourceType && allowedTarget === targetType);
+}
+
+const relationEndpointLabel = (sourceType: EntityType, targetType: EntityType) => `${sourceType} → ${targetType}`;
+
+export const CreateSessionInputSchema = z
+  .object({
+    projectId: id,
+    name: z.string().trim().min(1).max(160),
+    provider: ProviderSchema.default("other"),
+    status: SessionStatusSchema.default("active"),
+    externalRef: optionalText(240),
+    externalUrl: optionalText(1000),
+    summary: optionalText(4000),
+  })
+  .strict();
+
+export const AssignSessionToTaskInputSchema = z
+  .object({
+    taskId: id,
+    sessionId: id,
+    role: SessionRoleSchema.default("implementer"),
+  })
+  .strict();
 
 export const CreateArtifactInputSchema = z.object({
   projectId: id,
@@ -114,14 +152,26 @@ export const CreateArtifactInputSchema = z.object({
   metadata: z.record(z.unknown()).default({}),
 });
 
-export const CreateRelationInputSchema = z.object({
-  sourceType: EntityTypeSchema,
-  sourceId: id,
-  targetType: EntityTypeSchema,
-  targetId: id,
-  relationType: RelationTypeSchema,
-  metadata: z.record(z.unknown()).optional().nullable(),
-});
+export const CreateRelationInputSchema = z
+  .object({
+    sourceType: EntityTypeSchema,
+    sourceId: id,
+    targetType: EntityTypeSchema,
+    targetId: id,
+    relationType: RelationTypeSchema,
+    metadata: z.record(z.unknown()).optional().nullable(),
+  })
+  .superRefine((value, context) => {
+    if (isRelationCompatible(value.sourceType, value.targetType, value.relationType)) return;
+    const allowed = RELATION_COMPATIBILITY[value.relationType]
+      .map(([sourceType, targetType]) => relationEndpointLabel(sourceType, targetType))
+      .join(", ");
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["relationType"],
+      message: `Relation ${value.relationType} does not allow ${relationEndpointLabel(value.sourceType, value.targetType)}; allowed: ${allowed}`,
+    });
+  });
 
 export interface Project {
   id: string;
@@ -336,5 +386,6 @@ export type CreateProjectInput = z.input<typeof CreateProjectInputSchema>;
 export type CreateTaskInput = z.input<typeof CreateTaskInputSchema>;
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInputSchema>;
 export type CreateSessionInput = z.input<typeof CreateSessionInputSchema>;
+export type AssignSessionToTaskInput = z.input<typeof AssignSessionToTaskInputSchema>;
 export type CreateArtifactInput = z.input<typeof CreateArtifactInputSchema>;
 export type CreateRelationInput = z.input<typeof CreateRelationInputSchema>;

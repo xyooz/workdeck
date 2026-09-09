@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { RELATION_COMPATIBILITY, RELATION_TYPES, type RelationType } from "@workdeck/domain";
 import { api, type Artifact, type ArtifactType, type BoardResponse, type BoardTask, type Priority, type Project, type ProjectSession, type Provider, type SessionRole, type SessionStatus, type Task, type TaskDetail, type TaskSession, type TaskStatus } from "./api";
 
 const COLUMNS: Array<{ key: TaskStatus; label: string; eyebrow: string }> = [
@@ -57,8 +58,6 @@ const SESSION_STATUS_LABELS: Record<SessionStatus, string> = {
   failed: "Failed",
   archived: "Archived",
 };
-
-const RELATION_TYPES = ["implements", "reviews", "continues", "depends_on", "blocks", "produces", "fixes", "derived_from", "defines"] as const;
 
 const titleCase = (value: string) => value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 
@@ -169,15 +168,9 @@ function App() {
     }
   };
 
-  const openRelationModal = async () => {
-    if (!selectedProjectId) return;
-    try {
-      const result = await api.listProjectSessions(selectedProjectId);
-      setProjectSessions(result.sessions);
-      setModal("relation");
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not load relation entities");
-    }
+  const openRelationModal = () => {
+    if (!taskDetail) return;
+    setModal("relation");
   };
 
   const saveTaskStatus = async (status: TaskStatus) => {
@@ -413,7 +406,7 @@ function App() {
       {modal === "task" ? <Modal title="Add task" onClose={() => setModal(null)}><TaskForm tasks={board?.tasks ?? []} onSubmit={createTask} onCancel={() => setModal(null)} /></Modal> : null}
       {modal === "session" && taskDetail ? <Modal title="Link a session" subtitle={`Connect work to ${taskDetail.task.title}`} onClose={() => setModal(null)}><SessionForm sessions={projectSessions} currentTaskId={taskDetail.task.id} onSubmit={createSession} onCancel={() => setModal(null)} /></Modal> : null}
       {modal === "artifact" && taskDetail ? <Modal title="Attach artifact" subtitle="Record the outcome this task produced" onClose={() => setModal(null)}><ArtifactForm onSubmit={createArtifact} onCancel={() => setModal(null)} /></Modal> : null}
-      {modal === "relation" && taskDetail ? <Modal title="Add relation" subtitle="Connect work without coupling it to a provider" onClose={() => setModal(null)}><RelationForm task={taskDetail.task} tasks={board?.tasks ?? []} sessions={projectSessions} artifacts={taskDetail.artifacts} onSubmit={createRelation} onCancel={() => setModal(null)} /></Modal> : null}
+      {modal === "relation" && taskDetail ? <Modal title="Add relation" subtitle="Connect work without coupling it to a provider" onClose={() => setModal(null)}><RelationForm task={taskDetail.task} tasks={board?.tasks ?? []} sessions={taskDetail.sessions} artifacts={taskDetail.artifacts} onSubmit={createRelation} onCancel={() => setModal(null)} /></Modal> : null}
       {notice ? <div className="toast"><span className="toast-check">✓</span>{notice}</div> : null}
     </div>
   );
@@ -546,24 +539,30 @@ function SessionForm({ sessions, currentTaskId, onSubmit, onCancel }: { sessions
   return <form className="form" onSubmit={submit}><div className="segmented-control"><button type="button" className={mode === "existing" ? "active" : ""} onClick={() => setMode("existing")} disabled={!available.length}>Existing session</button><button type="button" className={mode === "new" ? "active" : ""} onClick={() => setMode("new")}>New session</button></div>{mode === "existing" ? <><label><span>Choose a session</span><select value={sessionId} onChange={(event) => setSessionId(event.target.value)}>{available.length ? available.map((session) => <option key={session.id} value={session.id}>{session.name}{session.assignments.length ? ` · ${session.assignments.map((assignment) => ROLE_LABELS[assignment.role]).join(" / ")}` : " · unassigned"}</option>) : <option value="">No other sessions</option>}</select></label><label><span>Role for this task</span><select value={existingRole} onChange={(event) => setExistingRole(event.target.value as SessionRole)}>{Object.entries(ROLE_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></> : <><label><span>Session name</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Review Chat" /></label><div className="form-grid"><label><span>Provider</span><select value={provider} onChange={(event) => setProvider(event.target.value as Provider)}>{Object.entries(PROVIDER_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label><span>Role for this task</span><select value={role} onChange={(event) => setRole(event.target.value as SessionRole)}>{Object.entries(ROLE_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div><label><span>Summary <em>Optional</em></span><textarea value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What is this session responsible for?" rows={3} /></label></>}<FormActions onCancel={onCancel} busy={busy} submitLabel={mode === "existing" ? "Link session" : "Create & link"} /></form>;
 }
 
-function RelationForm({ task, tasks, sessions, artifacts, onSubmit, onCancel }: { task: Task; tasks: BoardTask[]; sessions: ProjectSession[]; artifacts: Artifact[]; onSubmit: (input: { sourceType: string; sourceId: string; targetType: string; targetId: string; relationType: string }) => Promise<void>; onCancel: () => void }) {
+function RelationForm({ task, tasks, sessions, artifacts, onSubmit, onCancel }: { task: Task; tasks: BoardTask[]; sessions: TaskSession[]; artifacts: Artifact[]; onSubmit: (input: { sourceType: string; sourceId: string; targetType: string; targetId: string; relationType: string }) => Promise<void>; onCancel: () => void }) {
   const entities = useMemo(() => [
-    ...tasks.map((candidate) => ({ value: `task:${candidate.id}`, type: "task", id: candidate.id, label: `Task · ${candidate.title}` })),
-    ...sessions.map((session) => ({ value: `session:${session.id}`, type: "session", id: session.id, label: `Session · ${session.name}` })),
-    ...artifacts.map((artifact) => ({ value: `artifact:${artifact.id}`, type: "artifact", id: artifact.id, label: `Artifact · ${artifact.title}` })),
+    ...tasks.map((candidate) => ({ value: `task:${candidate.id}`, type: "task" as const, id: candidate.id, label: `Task · ${candidate.title}` })),
+    ...sessions.map((session) => ({ value: `session:${session.id}`, type: "session" as const, id: session.id, label: `Session · ${session.name} · ${ROLE_LABELS[session.role]}` })),
+    ...artifacts.map((artifact) => ({ value: `artifact:${artifact.id}`, type: "artifact" as const, id: artifact.id, label: `Artifact · ${artifact.title}` })),
   ], [artifacts, sessions, tasks]);
   const currentValue = `task:${task.id}`;
   const firstOther = entities.find((entity) => entity.value !== currentValue)?.value ?? currentValue;
   const [source, setSource] = useState(currentValue);
   const [target, setTarget] = useState(firstOther);
-  const [relationType, setRelationType] = useState<(typeof RELATION_TYPES)[number]>("depends_on");
+  const [relationType, setRelationType] = useState<RelationType>("depends_on");
   const [busy, setBusy] = useState(false);
+  const sourceEntity = entities.find((entity) => entity.value === source);
+  const targetEntity = entities.find((entity) => entity.value === target);
+  const allowedRelationTypes = useMemo(
+    () => RELATION_TYPES.filter((candidate) => sourceEntity && targetEntity && RELATION_COMPATIBILITY[candidate].some(([allowedSource, allowedTarget]) => allowedSource === sourceEntity.type && allowedTarget === targetEntity.type)),
+    [sourceEntity, targetEntity],
+  );
+  useEffect(() => {
+    if (allowedRelationTypes.length && !allowedRelationTypes.includes(relationType)) setRelationType(allowedRelationTypes[0]);
+  }, [allowedRelationTypes, relationType]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (source === target) return;
-    const sourceEntity = entities.find((entity) => entity.value === source);
-    const targetEntity = entities.find((entity) => entity.value === target);
-    if (!sourceEntity || !targetEntity) return;
+    if (source === target || !sourceEntity || !targetEntity || !allowedRelationTypes.includes(relationType)) return;
     setBusy(true);
     try {
       await onSubmit({ sourceType: sourceEntity.type, sourceId: sourceEntity.id, targetType: targetEntity.type, targetId: targetEntity.id, relationType });
@@ -571,7 +570,7 @@ function RelationForm({ task, tasks, sessions, artifacts, onSubmit, onCancel }: 
       setBusy(false);
     }
   };
-  return <form className="form" onSubmit={submit}><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value)}>{entities.map((entity) => <option key={entity.value} value={entity.value}>{entity.label}</option>)}</select></label><label><span>Relation type</span><select value={relationType} onChange={(event) => setRelationType(event.target.value as (typeof RELATION_TYPES)[number])}>{RELATION_TYPES.map((type) => <option key={type} value={type}>{titleCase(type)}</option>)}</select></label><label><span>Target</span><select value={target} onChange={(event) => setTarget(event.target.value)}>{entities.map((entity) => <option key={entity.value} value={entity.value}>{entity.label}</option>)}</select></label><p className="relation-form-hint">Relations stay provider-neutral. For example: Architecture Chat → defines → Phase 2C.</p><FormActions onCancel={onCancel} busy={busy} submitLabel="Add relation" /></form>;
+  return <form className="form" onSubmit={submit}><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value)}>{entities.map((entity) => <option key={entity.value} value={entity.value}>{entity.label}</option>)}</select></label><label><span>Relation type</span><select value={relationType} onChange={(event) => setRelationType(event.target.value as RelationType)} disabled={!allowedRelationTypes.length}>{allowedRelationTypes.map((type) => <option key={type} value={type}>{titleCase(type)}</option>)}</select></label><label><span>Target</span><select value={target} onChange={(event) => setTarget(event.target.value)}>{entities.map((entity) => <option key={entity.value} value={entity.value}>{entity.label}</option>)}</select></label><p className="relation-form-hint">{allowedRelationTypes.length ? `Allowed in this context: ${allowedRelationTypes.map(titleCase).join(", ")}. Sessions and artifacts are limited to this task.` : "No supported relation for this source and target. Choose a compatible endpoint pair."}</p><FormActions onCancel={onCancel} busy={busy} disabled={!allowedRelationTypes.length || source === target} submitLabel="Add relation" /></form>;
 }
 
 function ArtifactForm({ onSubmit, onCancel }: { onSubmit: (input: Record<string, unknown>) => Promise<void>; onCancel: () => void }) {
@@ -584,8 +583,8 @@ function ArtifactForm({ onSubmit, onCancel }: { onSubmit: (input: Record<string,
   return <form className="form" onSubmit={submit}><label><span>Artifact type</span><select value={type} onChange={(event) => setType(event.target.value as ArtifactType)}>{Object.entries(ARTIFACT_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label><span>Title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. ec565d5 · baseline" /></label><div className="form-grid"><label><span>Reference <em>Optional</em></span><input value={externalRef} onChange={(event) => setExternalRef(event.target.value)} placeholder="ec565d5" /></label><label><span>URL <em>Optional</em></span><input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="https://…" /></label></div><FormActions onCancel={onCancel} busy={busy} submitLabel="Attach artifact" /></form>;
 }
 
-function FormActions({ onCancel, busy, submitLabel }: { onCancel: () => void; busy: boolean; submitLabel: string }) {
-  return <div className="form-actions"><button type="button" className="button secondary" onClick={onCancel}>Cancel</button><button type="submit" className="button primary" disabled={busy}>{busy ? <><span className="button-spinner" />Saving…</> : submitLabel}</button></div>;
+function FormActions({ onCancel, busy, disabled, submitLabel }: { onCancel: () => void; busy: boolean; disabled?: boolean; submitLabel: string }) {
+  return <div className="form-actions"><button type="button" className="button secondary" onClick={onCancel}>Cancel</button><button type="submit" className="button primary" disabled={busy || disabled}>{busy ? <><span className="button-spinner" />Saving…</> : submitLabel}</button></div>;
 }
 
 function HandoffModal({ markdown, onClose, onCopied }: { markdown: string; onClose: () => void; onCopied: () => void }) {
