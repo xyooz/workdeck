@@ -67,6 +67,12 @@ export const CreateTaskInputSchema = z.object({
   parentTaskId: id.optional().nullable(),
   title: z.string().trim().min(1).max(180),
   description: z.string().trim().max(8000).optional().default(""),
+  goal: z.string().trim().max(8000).optional().default(""),
+  architectureNotes: z.string().trim().max(12000).optional().default(""),
+  reviewContext: z.string().trim().max(12000).optional().default(""),
+  acceptanceCriteria: z.string().trim().max(12000).optional().default(""),
+  constraints: z.string().trim().max(12000).optional().default(""),
+  nextStep: z.string().trim().max(4000).optional().default(""),
   status: TaskStatusSchema.default("backlog"),
   priority: PrioritySchema.default("medium"),
 });
@@ -75,6 +81,12 @@ export const UpdateTaskInputSchema = z
   .object({
     title: z.string().trim().min(1).max(180).optional(),
     description: z.string().trim().max(8000).optional(),
+    goal: z.string().trim().max(8000).optional(),
+    architectureNotes: z.string().trim().max(12000).optional(),
+    reviewContext: z.string().trim().max(12000).optional(),
+    acceptanceCriteria: z.string().trim().max(12000).optional(),
+    constraints: z.string().trim().max(12000).optional(),
+    nextStep: z.string().trim().max(4000).optional(),
     status: TaskStatusSchema.optional(),
     priority: PrioritySchema.optional(),
     parentTaskId: id.optional().nullable(),
@@ -125,6 +137,12 @@ export interface Task {
   parentTaskId: string | null;
   title: string;
   description: string;
+  goal: string;
+  architectureNotes: string;
+  reviewContext: string;
+  acceptanceCriteria: string;
+  constraints: string;
+  nextStep: string;
   status: TaskStatus;
   priority: Priority;
   createdAt: string;
@@ -134,16 +152,33 @@ export interface Task {
 export interface Session {
   id: string;
   projectId: string;
-  taskId: string | null;
   name: string;
   provider: Provider;
-  role: SessionRole;
   status: SessionStatus;
   externalRef: string | null;
   externalUrl: string | null;
   summary: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SessionAssignment {
+  taskId: string;
+  sessionId: string;
+  role: SessionRole;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskSession extends Session {
+  taskId: string;
+  role: SessionRole;
+  assignmentCreatedAt: string;
+  assignmentUpdatedAt: string;
+}
+
+export interface ProjectSession extends Session {
+  assignments: SessionAssignment[];
 }
 
 export interface Artifact {
@@ -184,9 +219,9 @@ export interface HandoffRelation {
 
 export interface HandoffContext {
   projectName: string;
-  task: Pick<Task, "title" | "description" | "status" | "priority">;
+  task: Pick<Task, "title" | "description" | "goal" | "architectureNotes" | "reviewContext" | "acceptanceCriteria" | "constraints" | "nextStep" | "status" | "priority">;
   relatedTasks: Array<{ title: string; status: TaskStatus; relationType: RelationType }>;
-  sessions: Array<Pick<Session, "name" | "role" | "provider" | "status" | "summary">>;
+  sessions: Array<Pick<TaskSession, "name" | "role" | "provider" | "status" | "summary">>;
   artifacts: Array<Pick<Artifact, "type" | "title" | "externalRef" | "externalUrl">>;
   dependencies: Array<{ title: string; relationType: RelationType }>;
   relations: HandoffRelation[];
@@ -238,12 +273,13 @@ export function renderHandoffMarkdown(context: HandoffContext): string {
   const relations = context.relations.map(
     (relation) => `- ${relation.source} — ${relationize(relation.relationType)} → ${relation.target}`,
   );
+  const reviewContext = [context.task.reviewContext, ...context.knownReviewFixContext].filter(Boolean);
 
   return `# ${projectName} — ${task.title} Handoff
 
 ## Goal
 
-${task.description || "No goal has been recorded yet."}
+${task.goal || task.description || "No goal has been recorded yet."}
 
 ## Current Status
 
@@ -253,6 +289,10 @@ ${task.description || "No goal has been recorded yet."}
 ## Task Description
 
 ${task.description || "No additional task description."}
+
+## Key Architecture Decisions
+
+${task.architectureNotes || "- None recorded"}
 
 ## Related Tasks
 
@@ -276,11 +316,19 @@ ${bulletList(relations)}
 
 ## Known Review / Fix Context
 
-${bulletList(context.knownReviewFixContext)}
+${reviewContext.length ? reviewContext.map((item) => (item.startsWith("- ") ? item : `- ${item}`)).join("\n") : "- None"}
+
+## Acceptance Criteria
+
+${task.acceptanceCriteria || "- None recorded"}
+
+## Protected Constraints
+
+${task.constraints || "- None recorded"}
 
 ## Next Step
 
-Continue from the current status and preserve the relations and artifacts listed above.
+${task.nextStep || "Continue from the current status and preserve the relations and artifacts listed above."}
 `;
 }
 

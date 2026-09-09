@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { api, type Artifact, type ArtifactType, type BoardResponse, type BoardTask, type Priority, type Project, type Provider, type Session, type SessionRole, type SessionStatus, type Task, type TaskDetail, type TaskStatus } from "./api";
+import { api, type Artifact, type ArtifactType, type BoardResponse, type BoardTask, type Priority, type Project, type ProjectSession, type Provider, type SessionRole, type SessionStatus, type Task, type TaskDetail, type TaskSession, type TaskStatus } from "./api";
 
 const COLUMNS: Array<{ key: TaskStatus; label: string; eyebrow: string }> = [
   { key: "backlog", label: "Backlog", eyebrow: "Queued" },
@@ -58,6 +58,8 @@ const SESSION_STATUS_LABELS: Record<SessionStatus, string> = {
   archived: "Archived",
 };
 
+const RELATION_TYPES = ["implements", "reviews", "continues", "depends_on", "blocks", "produces", "fixes", "derived_from", "defines"] as const;
+
 const titleCase = (value: string) => value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 function relativeTime(timestamp: string) {
@@ -80,9 +82,9 @@ function App() {
   const [board, setBoard] = useState<BoardResponse | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
-  const [projectSessions, setProjectSessions] = useState<Session[]>([]);
+  const [projectSessions, setProjectSessions] = useState<ProjectSession[]>([]);
   const [handoff, setHandoff] = useState<string | null>(null);
-  const [modal, setModal] = useState<"project" | "task" | "session" | "artifact" | null>(null);
+  const [modal, setModal] = useState<"project" | "task" | "session" | "artifact" | "relation" | null>(null);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingBoard, setLoadingBoard] = useState(false);
   const [loadingTask, setLoadingTask] = useState(false);
@@ -142,7 +144,7 @@ function App() {
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? board?.project ?? null;
   const activeTaskCount = board?.tasks.filter((task) => !["done", "backlog"].includes(task.status)).length ?? 0;
   const blockedCount = board?.tasks.filter((task) => task.status === "blocked").length ?? 0;
-  const activeSessionCount = board?.tasks.reduce((count, task) => count + task.sessions.filter((session) => session.status === "active").length, 0) ?? 0;
+  const activeSessionCount = board ? new Set(board.tasks.flatMap((task) => task.sessions.filter((session) => session.status === "active").map((session) => session.id))).size : 0;
 
   const refreshWorkspace = async () => {
     if (selectedProjectId) await loadBoard(selectedProjectId);
@@ -167,6 +169,17 @@ function App() {
     }
   };
 
+  const openRelationModal = async () => {
+    if (!selectedProjectId) return;
+    try {
+      const result = await api.listProjectSessions(selectedProjectId);
+      setProjectSessions(result.sessions);
+      setModal("relation");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load relation entities");
+    }
+  };
+
   const saveTaskStatus = async (status: TaskStatus) => {
     if (!taskDetail) return;
     try {
@@ -186,6 +199,17 @@ function App() {
       await refreshWorkspace();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not update task");
+    }
+  };
+
+  const saveTaskContext = async (input: Partial<Pick<Task, "goal" | "architectureNotes" | "reviewContext" | "acceptanceCriteria" | "constraints" | "nextStep">>) => {
+    if (!taskDetail) return;
+    try {
+      await api.updateTask(taskDetail.task.id, input);
+      setNotice("Handoff context saved");
+      await refreshWorkspace();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save handoff context");
     }
   };
 
@@ -233,6 +257,17 @@ function App() {
       setNotice("Artifact attached");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not attach artifact");
+    }
+  };
+
+  const createRelation = async (input: { sourceType: string; sourceId: string; targetType: string; targetId: string; relationType: string }) => {
+    try {
+      await api.createRelation(input);
+      setModal(null);
+      await refreshWorkspace();
+      setNotice("Relation recorded");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not create relation");
     }
   };
 
@@ -367,6 +402,8 @@ function App() {
           onPriorityChange={saveTaskPriority}
           onNewSession={() => void openSessionModal()}
           onNewArtifact={() => setModal("artifact")}
+          onNewRelation={() => void openRelationModal()}
+          onSaveContext={saveTaskContext}
           onGenerateHandoff={() => void generateHandoff()}
         />
       ) : null}
@@ -376,6 +413,7 @@ function App() {
       {modal === "task" ? <Modal title="Add task" onClose={() => setModal(null)}><TaskForm tasks={board?.tasks ?? []} onSubmit={createTask} onCancel={() => setModal(null)} /></Modal> : null}
       {modal === "session" && taskDetail ? <Modal title="Link a session" subtitle={`Connect work to ${taskDetail.task.title}`} onClose={() => setModal(null)}><SessionForm sessions={projectSessions} currentTaskId={taskDetail.task.id} onSubmit={createSession} onCancel={() => setModal(null)} /></Modal> : null}
       {modal === "artifact" && taskDetail ? <Modal title="Attach artifact" subtitle="Record the outcome this task produced" onClose={() => setModal(null)}><ArtifactForm onSubmit={createArtifact} onCancel={() => setModal(null)} /></Modal> : null}
+      {modal === "relation" && taskDetail ? <Modal title="Add relation" subtitle="Connect work without coupling it to a provider" onClose={() => setModal(null)}><RelationForm task={taskDetail.task} tasks={board?.tasks ?? []} sessions={projectSessions} artifacts={taskDetail.artifacts} onSubmit={createRelation} onCancel={() => setModal(null)} /></Modal> : null}
       {notice ? <div className="toast"><span className="toast-check">✓</span>{notice}</div> : null}
     </div>
   );
@@ -421,7 +459,7 @@ function ContextRow({ label, value, icon, muted }: { label: string; value: strin
   return <div className="context-row"><span className="context-label"><span className="context-icon">{icon}</span>{label}</span><span className={`context-value ${muted ? "muted" : ""}`}>{value}</span></div>;
 }
 
-function TaskDrawer({ detail, loading, onClose, onStatusChange, onPriorityChange, onNewSession, onNewArtifact, onGenerateHandoff }: { detail: TaskDetail | null; loading: boolean; onClose: () => void; onStatusChange: (status: TaskStatus) => void; onPriorityChange: (priority: Priority) => void; onNewSession: () => void; onNewArtifact: () => void; onGenerateHandoff: () => void }) {
+function TaskDrawer({ detail, loading, onClose, onStatusChange, onPriorityChange, onNewSession, onNewArtifact, onNewRelation, onSaveContext, onGenerateHandoff }: { detail: TaskDetail | null; loading: boolean; onClose: () => void; onStatusChange: (status: TaskStatus) => void; onPriorityChange: (priority: Priority) => void; onNewSession: () => void; onNewArtifact: () => void; onNewRelation: () => void; onSaveContext: (input: Partial<Pick<Task, "goal" | "architectureNotes" | "reviewContext" | "acceptanceCriteria" | "constraints" | "nextStep">>) => Promise<void>; onGenerateHandoff: () => void }) {
   return (
     <div className="drawer-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <aside className="task-drawer">
@@ -430,9 +468,10 @@ function TaskDrawer({ detail, loading, onClose, onStatusChange, onPriorityChange
           <div className="drawer-heading"><div className="drawer-task-code">{taskCode(detail.task)}</div><div className="drawer-title-row"><h2>{detail.task.title}</h2><span className={`drawer-priority priority-${detail.task.priority}`}>{PRIORITY_LABELS[detail.task.priority]}</span></div><p>{detail.project.name} · updated {relativeTime(detail.task.updatedAt)}</p></div>
           <div className="drawer-controls"><label><span>Status</span><select value={detail.task.status} onChange={(event) => onStatusChange(event.target.value as TaskStatus)}>{COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</select></label><label><span>Priority</span><select value={detail.task.priority} onChange={(event) => onPriorityChange(event.target.value as Priority)}>{Object.keys(PRIORITY_LABELS).map((priority) => <option key={priority} value={priority}>{PRIORITY_LABELS[priority as Priority]}</option>)}</select></label></div>
           <DrawerSection title="Basic" icon="◈"><div className="basic-copy">{detail.task.description || "No task description yet."}</div>{detail.parentTask ? <div className="parent-task"><span>Parent task</span><strong>{detail.parentTask.title}</strong></div> : null}</DrawerSection>
+          <TaskContextEditor task={detail.task} onSave={onSaveContext} />
           <DrawerSection title="Sessions" icon="◉" action={<button className="section-add" onClick={onNewSession}>＋ Add</button>}><div className="session-list">{detail.sessions.length ? detail.sessions.map((session) => <SessionRow key={session.id} session={session} />) : <EmptySection copy="No sessions linked yet." />}</div></DrawerSection>
           <DrawerSection title="Artifacts" icon="⌁" action={<button className="section-add" onClick={onNewArtifact}>＋ Add</button>}><div className="artifact-list">{detail.artifacts.length ? detail.artifacts.map((artifact) => <ArtifactRow key={artifact.id} artifact={artifact} />) : <EmptySection copy="No artifacts attached yet." />}</div></DrawerSection>
-          <DrawerSection title="Relations" icon="⤢"><div className="relation-list">{detail.relations.length ? detail.relations.map((relation) => <div className="relation-row" key={relation.id}><span className="relation-node">{relation.source.label}</span><span className="relation-arrow"><span>{titleCase(relation.relationType)}</span> →</span><span className="relation-node target">{relation.target.label}</span></div>) : <EmptySection copy="No relations recorded yet." />}</div></DrawerSection>
+          <DrawerSection title="Relations" icon="⤢" action={<button className="section-add" onClick={onNewRelation}>＋ Add</button>}><div className="relation-list">{detail.relations.length ? detail.relations.map((relation) => <div className="relation-row" key={relation.id}><span className="relation-node">{relation.source.label}</span><span className="relation-arrow"><span>{titleCase(relation.relationType)}</span> →</span><span className="relation-node target">{relation.target.label}</span></div>) : <EmptySection copy="No relations recorded yet." />}</div></DrawerSection>
           <DrawerSection title="Event trail" icon="◷"><div className="event-list">{detail.events.slice(0, 6).map((event) => <div className="event-row" key={event.id}><span className="event-dot" /><div><strong>{titleCase(event.eventType)}</strong><span>{relativeTime(event.createdAt)}</span></div></div>)}</div></DrawerSection>
           <div className="drawer-bottom"><button className="button primary full" onClick={onGenerateHandoff}><span>✦</span> Generate handoff</button><span className="drawer-bottom-hint">Create a portable Markdown brief for the next session.</span></div>
         </>}
@@ -445,7 +484,18 @@ function DrawerSection({ title, icon, action, children }: { title: string; icon:
   return <section className="drawer-section"><div className="drawer-section-heading"><h3><span className="section-icon">{icon}</span>{title}</h3>{action}</div>{children}</section>;
 }
 
-function SessionRow({ session }: { session: Session }) {
+function TaskContextEditor({ task, onSave }: { task: Task; onSave: (input: Partial<Pick<Task, "goal" | "architectureNotes" | "reviewContext" | "acceptanceCriteria" | "constraints" | "nextStep">>) => Promise<void> }) {
+  const [values, setValues] = useState({ goal: task.goal, architectureNotes: task.architectureNotes, reviewContext: task.reviewContext, acceptanceCriteria: task.acceptanceCriteria, constraints: task.constraints, nextStep: task.nextStep });
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setValues({ goal: task.goal, architectureNotes: task.architectureNotes, reviewContext: task.reviewContext, acceptanceCriteria: task.acceptanceCriteria, constraints: task.constraints, nextStep: task.nextStep });
+  }, [task.id, task.goal, task.architectureNotes, task.reviewContext, task.acceptanceCriteria, task.constraints, task.nextStep]);
+  const update = (key: keyof typeof values, value: string) => setValues((current) => ({ ...current, [key]: value }));
+  const save = async (event: FormEvent) => { event.preventDefault(); setBusy(true); try { await onSave(values); } finally { setBusy(false); } };
+  return <section className="drawer-section handoff-context-section"><div className="drawer-section-heading"><h3><span className="section-icon">✦</span>Handoff context</h3><span className="context-badge">portable</span></div><form className="context-editor" onSubmit={save}><label><span>Goal</span><textarea value={values.goal} onChange={(event) => update("goal", event.target.value)} placeholder="What outcome should this task deliver?" rows={2} /></label><label><span>Key architecture decisions</span><textarea value={values.architectureNotes} onChange={(event) => update("architectureNotes", event.target.value)} placeholder="Boundaries, interfaces, trade-offs…" rows={3} /></label><label><span>Review findings / fix context</span><textarea value={values.reviewContext} onChange={(event) => update("reviewContext", event.target.value)} placeholder="P0/P1 issues, review notes…" rows={3} /></label><div className="context-editor-grid"><label><span>Acceptance criteria</span><textarea value={values.acceptanceCriteria} onChange={(event) => update("acceptanceCriteria", event.target.value)} placeholder="What proves this is done?" rows={3} /></label><label><span>Protected constraints</span><textarea value={values.constraints} onChange={(event) => update("constraints", event.target.value)} placeholder="What must not break?" rows={3} /></label></div><label><span>Next step</span><textarea value={values.nextStep} onChange={(event) => update("nextStep", event.target.value)} placeholder="The next concrete action…" rows={2} /></label><button type="submit" className="context-save" disabled={busy}>{busy ? "Saving…" : "Save context"}</button></form></section>;
+}
+
+function SessionRow({ session }: { session: TaskSession }) {
   return <div className="session-row"><div className={`session-avatar role-${session.role}`}>{session.name.slice(0, 1).toUpperCase()}</div><div className="session-copy"><strong>{session.name}</strong><span>{ROLE_LABELS[session.role]} · {PROVIDER_LABELS[session.provider]}</span></div><span className={`session-status status-${session.status}`}><span />{SESSION_STATUS_LABELS[session.status]}</span></div>;
 }
 
@@ -482,17 +532,46 @@ function TaskForm({ tasks, onSubmit, onCancel }: { tasks: BoardTask[]; onSubmit:
   return <form className="form" onSubmit={submit}><label><span>Task title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Define session boundary" /></label><label><span>Description <em>Optional</em></span><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the outcome or constraint…" rows={4} /></label><div className="form-grid"><label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value as TaskStatus)}>{COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</select></label><label><span>Priority</span><select value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>{Object.entries(PRIORITY_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div><label><span>Parent task <em>Optional</em></span><select value={parentTaskId} onChange={(event) => setParentTaskId(event.target.value)}><option value="">No parent</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label><FormActions onCancel={onCancel} busy={busy} submitLabel="Add task" /></form>;
 }
 
-function SessionForm({ sessions, currentTaskId, onSubmit, onCancel }: { sessions: Session[]; currentTaskId: string; onSubmit: (input: Record<string, unknown>) => Promise<void>; onCancel: () => void }) {
-  const [mode, setMode] = useState<"new" | "existing">(sessions.some((session) => !session.taskId) ? "existing" : "new");
-  const [sessionId, setSessionId] = useState(sessions.find((session) => !session.taskId)?.id ?? "");
+function SessionForm({ sessions, currentTaskId, onSubmit, onCancel }: { sessions: ProjectSession[]; currentTaskId: string; onSubmit: (input: Record<string, unknown>) => Promise<void>; onCancel: () => void }) {
+  const [mode, setMode] = useState<"new" | "existing">(sessions.some((session) => !session.assignments.length || session.assignments.every((assignment) => assignment.taskId !== currentTaskId)) ? "existing" : "new");
+  const [sessionId, setSessionId] = useState(sessions.find((session) => !session.assignments.length || session.assignments.every((assignment) => assignment.taskId !== currentTaskId))?.id ?? "");
   const [name, setName] = useState("");
   const [provider, setProvider] = useState<Provider>("codex");
   const [role, setRole] = useState<SessionRole>("implementer");
+  const [existingRole, setExistingRole] = useState<SessionRole>("reviewer");
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
-  const available = sessions.filter((session) => session.taskId !== currentTaskId);
-  const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); try { await onSubmit(mode === "existing" ? { sessionId } : { name, provider, role, status: "active", summary }); } finally { setBusy(false); } };
-  return <form className="form" onSubmit={submit}><div className="segmented-control"><button type="button" className={mode === "existing" ? "active" : ""} onClick={() => setMode("existing")} disabled={!available.length}>Existing session</button><button type="button" className={mode === "new" ? "active" : ""} onClick={() => setMode("new")}>New session</button></div>{mode === "existing" ? <label><span>Choose a session</span><select value={sessionId} onChange={(event) => setSessionId(event.target.value)}>{available.length ? available.map((session) => <option key={session.id} value={session.id}>{session.name} · {ROLE_LABELS[session.role]}</option>) : <option value="">No unlinked sessions</option>}</select></label> : <><label><span>Session name</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Review Chat" /></label><div className="form-grid"><label><span>Provider</span><select value={provider} onChange={(event) => setProvider(event.target.value as Provider)}>{Object.entries(PROVIDER_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label><span>Role</span><select value={role} onChange={(event) => setRole(event.target.value as SessionRole)}>{Object.entries(ROLE_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div><label><span>Summary <em>Optional</em></span><textarea value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What is this session responsible for?" rows={3} /></label></>}<FormActions onCancel={onCancel} busy={busy} submitLabel={mode === "existing" ? "Link session" : "Create & link"} /></form>;
+  const available = sessions.filter((session) => !session.assignments.some((assignment) => assignment.taskId === currentTaskId));
+  const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); try { await onSubmit(mode === "existing" ? { sessionId, role: existingRole } : { name, provider, role, status: "active", summary }); } finally { setBusy(false); } };
+  return <form className="form" onSubmit={submit}><div className="segmented-control"><button type="button" className={mode === "existing" ? "active" : ""} onClick={() => setMode("existing")} disabled={!available.length}>Existing session</button><button type="button" className={mode === "new" ? "active" : ""} onClick={() => setMode("new")}>New session</button></div>{mode === "existing" ? <><label><span>Choose a session</span><select value={sessionId} onChange={(event) => setSessionId(event.target.value)}>{available.length ? available.map((session) => <option key={session.id} value={session.id}>{session.name}{session.assignments.length ? ` · ${session.assignments.map((assignment) => ROLE_LABELS[assignment.role]).join(" / ")}` : " · unassigned"}</option>) : <option value="">No other sessions</option>}</select></label><label><span>Role for this task</span><select value={existingRole} onChange={(event) => setExistingRole(event.target.value as SessionRole)}>{Object.entries(ROLE_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></> : <><label><span>Session name</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Review Chat" /></label><div className="form-grid"><label><span>Provider</span><select value={provider} onChange={(event) => setProvider(event.target.value as Provider)}>{Object.entries(PROVIDER_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label><span>Role for this task</span><select value={role} onChange={(event) => setRole(event.target.value as SessionRole)}>{Object.entries(ROLE_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div><label><span>Summary <em>Optional</em></span><textarea value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What is this session responsible for?" rows={3} /></label></>}<FormActions onCancel={onCancel} busy={busy} submitLabel={mode === "existing" ? "Link session" : "Create & link"} /></form>;
+}
+
+function RelationForm({ task, tasks, sessions, artifacts, onSubmit, onCancel }: { task: Task; tasks: BoardTask[]; sessions: ProjectSession[]; artifacts: Artifact[]; onSubmit: (input: { sourceType: string; sourceId: string; targetType: string; targetId: string; relationType: string }) => Promise<void>; onCancel: () => void }) {
+  const entities = useMemo(() => [
+    ...tasks.map((candidate) => ({ value: `task:${candidate.id}`, type: "task", id: candidate.id, label: `Task · ${candidate.title}` })),
+    ...sessions.map((session) => ({ value: `session:${session.id}`, type: "session", id: session.id, label: `Session · ${session.name}` })),
+    ...artifacts.map((artifact) => ({ value: `artifact:${artifact.id}`, type: "artifact", id: artifact.id, label: `Artifact · ${artifact.title}` })),
+  ], [artifacts, sessions, tasks]);
+  const currentValue = `task:${task.id}`;
+  const firstOther = entities.find((entity) => entity.value !== currentValue)?.value ?? currentValue;
+  const [source, setSource] = useState(currentValue);
+  const [target, setTarget] = useState(firstOther);
+  const [relationType, setRelationType] = useState<(typeof RELATION_TYPES)[number]>("depends_on");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (source === target) return;
+    const sourceEntity = entities.find((entity) => entity.value === source);
+    const targetEntity = entities.find((entity) => entity.value === target);
+    if (!sourceEntity || !targetEntity) return;
+    setBusy(true);
+    try {
+      await onSubmit({ sourceType: sourceEntity.type, sourceId: sourceEntity.id, targetType: targetEntity.type, targetId: targetEntity.id, relationType });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <form className="form" onSubmit={submit}><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value)}>{entities.map((entity) => <option key={entity.value} value={entity.value}>{entity.label}</option>)}</select></label><label><span>Relation type</span><select value={relationType} onChange={(event) => setRelationType(event.target.value as (typeof RELATION_TYPES)[number])}>{RELATION_TYPES.map((type) => <option key={type} value={type}>{titleCase(type)}</option>)}</select></label><label><span>Target</span><select value={target} onChange={(event) => setTarget(event.target.value)}>{entities.map((entity) => <option key={entity.value} value={entity.value}>{entity.label}</option>)}</select></label><p className="relation-form-hint">Relations stay provider-neutral. For example: Architecture Chat → defines → Phase 2C.</p><FormActions onCancel={onCancel} busy={busy} submitLabel="Add relation" /></form>;
 }
 
 function ArtifactForm({ onSubmit, onCancel }: { onSubmit: (input: Record<string, unknown>) => Promise<void>; onCancel: () => void }) {

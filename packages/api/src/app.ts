@@ -9,6 +9,7 @@ import {
   DomainError,
   NotFoundError,
   renderHandoffMarkdown,
+  SessionRoleSchema,
   UpdateTaskInputSchema,
   type Artifact,
   type EntityType,
@@ -82,7 +83,7 @@ export class WorkDeckService {
     const task = this.requireTask(taskId);
     const body = (input ?? {}) as Record<string, unknown>;
     if (typeof body.sessionId === "string" && body.sessionId.trim()) {
-      return this.db.linkSessionToTask(body.sessionId, taskId);
+      return this.db.linkSessionToTask(body.sessionId, taskId, SessionRoleSchema.parse(body.role ?? "implementer"));
     }
     const parsed = CreateSessionInputSchema.parse({ ...body, projectId: task.projectId, taskId });
     return this.db.createSession(parsed);

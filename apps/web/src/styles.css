@@ -178,6 +178,16 @@ input::placeholder, textarea::placeholder { color: #53627b; }
 .section-icon { color: var(--cyan); font-size: 13px; }
 .section-add { border: 0; color: var(--blue); background: transparent; font-size: 10px; }
 .basic-copy { padding: 13px 1px 0; color: #8491a9; font-size: 10px; line-height: 1.7; }
+.handoff-context-section { margin-top: 31px; }
+.context-badge { padding: 4px 6px; border: 1px solid rgba(102, 224, 210, .18); border-radius: 5px; color: var(--cyan); background: rgba(102, 224, 210, .07); font-family: 'DM Mono', monospace; font-size: 8px; text-transform: uppercase; letter-spacing: .06em; }
+.context-editor { display: grid; gap: 11px; padding-top: 12px; }
+.context-editor label { display: grid; gap: 5px; }
+.context-editor label > span { color: #71809a; font-size: 9px; }
+.context-editor textarea { min-height: 54px; padding: 8px 9px; color: #aebbd0; font-size: 9px; line-height: 1.45; }
+.context-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.context-editor-grid textarea { min-height: 76px; }
+.context-save { justify-self: start; height: 27px; padding: 0 9px; border: 1px solid rgba(108, 170, 246, .28); border-radius: 6px; color: #9ec5ff; background: rgba(87, 139, 215, .12); font-size: 9px; }
+.context-save:hover { border-color: rgba(108, 170, 246, .5); background: rgba(87, 139, 215, .22); }
 .parent-task { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 13px; padding: 9px 10px; border-radius: 6px; color: #66748d; background: rgba(38, 54, 82, .38); font-size: 9px; }
 .parent-task strong { overflow: hidden; color: #abb8ce; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .session-list, .artifact-list, .relation-list, .event-list { padding-top: 8px; }
@@ -202,6 +212,7 @@ input::placeholder, textarea::placeholder { color: #53627b; }
 .artifact-copy strong { overflow: hidden; color: #bfcce0; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-copy span { color: #65738c; font-size: 9px; }
 .external-link { margin-left: auto; color: var(--blue); text-decoration: none; }
+.relation-form-hint { margin: -2px 0 0; color: #66758e; font-size: 9px; line-height: 1.55; }
 .relation-row { display: grid; grid-template-columns: minmax(80px, 1fr) auto minmax(80px, 1fr); align-items: center; gap: 7px; padding: 8px 1px; font-size: 9px; }
 .relation-node { overflow: hidden; color: #aebbd0; text-overflow: ellipsis; white-space: nowrap; }
 .relation-node.target { text-align: right; }
